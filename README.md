@@ -1,4 +1,4 @@
-# Powerwall dashboard (POC)
+# Powerwall LCD
 
 Firmware ESP-IDF + LVGL 8 per [Waveshare ESP32-S3-Touch-LCD-7](https://docs.waveshare.com/ESP32-S3-Touch-LCD-7): monitoraggio live e storico di un impianto fotovoltaico Tesla Powerwall 3 tramite [MyTeslaMate Fleet API](https://www.myteslamate.com/api/).
 
