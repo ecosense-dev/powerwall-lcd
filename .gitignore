@@ -1,0 +1,16 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+.cache/
+.vscode/
+*.pyc
+__pycache__/
+secrets/
+*.bin
+*.elf
+*.map
+compile_commands.json
+/CMakeCache.txt
+/CMakeFiles/
