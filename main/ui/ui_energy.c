@@ -66,21 +66,30 @@ static void chart_draw_cb(lv_event_t *e)
     }
 
     if (dsc->type == LV_CHART_DRAW_PART_LINE_AND_POINT && dsc->line_dsc) {
+        lv_event_code_t code = lv_event_get_code(e);
         lv_obj_t *obj = lv_event_get_target(e);
         lv_area_t cont;
         lv_obj_get_content_coords(obj, &cont);
         lv_coord_t ybot = cont.y2;
         const lv_chart_series_t *ser = dsc->sub_part_ptr;
         if (ser == s_ser_solar) {
-            fill_area(dsc, ybot, COL_SOLAR_AREA, LV_OPA_40);
-            dsc->line_dsc->color = lv_color_hex(0xD0D0D0);
-            dsc->line_dsc->width = 2;
+            if (code == LV_EVENT_DRAW_PART_BEGIN) {
+                fill_area(dsc, ybot, COL_SOLAR, LV_OPA_30);
+                dsc->line_dsc->color = COL_SOLAR;
+                dsc->line_dsc->width = 2;
+            }
         } else if (ser == s_ser_batt) {
-            fill_area(dsc, ybot, COL_PW, LV_OPA_80);
-            dsc->line_dsc->opa = LV_OPA_TRANSP;
+            if (code == LV_EVENT_DRAW_PART_BEGIN) {
+                fill_area(dsc, ybot, COL_PW, LV_OPA_80);
+                dsc->line_dsc->opa = LV_OPA_TRANSP;
+            }
         } else if (ser == s_ser_home) {
+            if (code == LV_EVENT_DRAW_PART_BEGIN) {
+                fill_area(dsc, ybot, COL_HOME_BLUE, LV_OPA_40);
+            }
             dsc->line_dsc->color = COL_HOME_BLUE;
-            dsc->line_dsc->width = 3;
+            dsc->line_dsc->width = 4;
+            dsc->line_dsc->opa = LV_OPA_COVER;
         }
         return;
     }
@@ -313,10 +322,11 @@ void ui_energy_create(lv_obj_t *parent)
     lv_obj_set_style_line_dash_width(s_chart, 4, LV_PART_MAIN);
     lv_obj_set_style_line_dash_gap(s_chart, 6, LV_PART_MAIN);
     lv_obj_add_event_cb(s_chart, chart_draw_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
+    lv_obj_add_event_cb(s_chart, chart_draw_cb, LV_EVENT_DRAW_PART_END, NULL);
     apply_axes(3, 5);
 
-    /* Add solar first so it is drawn behind battery fill and home line. */
-    s_ser_solar = lv_chart_add_series(s_chart, COL_SOLAR_AREA, LV_CHART_AXIS_SECONDARY_Y);
+    /* Solar, then Powerwall charge, then home on top so the blue usage is visible. */
+    s_ser_solar = lv_chart_add_series(s_chart, COL_SOLAR, LV_CHART_AXIS_SECONDARY_Y);
     s_ser_batt = lv_chart_add_series(s_chart, COL_PW, LV_CHART_AXIS_SECONDARY_Y);
     s_ser_home = lv_chart_add_series(s_chart, COL_HOME_BLUE, LV_CHART_AXIS_SECONDARY_Y);
 
