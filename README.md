@@ -1,4 +1,4 @@
-# Powerwall LCD
+# Tesla Powerwall 3 LCD from teslamate
 
 Firmware **ESP-IDF 5.5** + **LVGL 8** per [Waveshare ESP32-S3-Touch-LCD-7](https://docs.waveshare.com/ESP32-S3-Touch-LCD-7): dashboard touch di un impianto Tesla **Powerwall** (solare, casa, batteria, rete) tramite [MyTeslaMate Fleet API](https://www.myteslamate.com/api/).
 
