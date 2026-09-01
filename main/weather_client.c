@@ -8,6 +8,7 @@
 #include <strings.h>
 
 #include "app_config.h"
+#include "app_i18n.h"
 #include "app_net.h"
 #include "app_tz.h"
 #include "app_wifi.h"
@@ -30,39 +31,39 @@ static const char *TAG = "weather";
 const char *weather_wmo_text(int code)
 {
     if (code == 0) {
-        return "Sereno";
+        return app_tr(STR_WMO_CLEAR);
     }
     if (code == 1) {
-        return "Poco nuv.";
+        return app_tr(STR_WMO_FAIR);
     }
     if (code == 2) {
-        return "Variabile";
+        return app_tr(STR_WMO_MIXED);
     }
     if (code == 3) {
-        return "Coperto";
+        return app_tr(STR_WMO_CLOUD);
     }
     if (code == 45 || code == 48) {
-        return "Nebbia";
+        return app_tr(STR_WMO_FOG);
     }
     if (code >= 51 && code <= 57) {
-        return "Pioviggine";
+        return app_tr(STR_WMO_DRIZZLE);
     }
     if (code >= 61 && code <= 67) {
-        return "Pioggia";
+        return app_tr(STR_WMO_RAIN);
     }
     if (code >= 71 && code <= 77) {
-        return "Neve";
+        return app_tr(STR_WMO_SNOW);
     }
     if (code >= 80 && code <= 82) {
-        return "Rovesci";
+        return app_tr(STR_WMO_SHOWER);
     }
     if (code == 85 || code == 86) {
-        return "Neve";
+        return app_tr(STR_WMO_SNOW);
     }
     if (code >= 95) {
-        return "Temporale";
+        return app_tr(STR_WMO_STORM);
     }
-    return "Meteo";
+    return app_tr(STR_WX);
 }
 
 typedef struct {
@@ -113,7 +114,7 @@ static void parse_forecast(cJSON *root, weather_t *wx)
     char ymds[WEATHER_DAYS][11];
     memset(ymds, 0, sizeof(ymds));
     int nd = 0;
-    static const char *titles[WEATHER_DAYS] = {"Oggi", "Domani", "Dopodomani"};
+    const char *titles[WEATHER_DAYS] = {app_tr(STR_TODAY), app_tr(STR_TOMORROW), app_tr(STR_DAY_AFTER)};
     for (int i = 0; i < n; i++) {
         cJSON *tsj = cJSON_GetArrayItem(times, i);
         if (!cJSON_IsString(tsj) || !tsj->valuestring) {
@@ -481,4 +482,25 @@ void weather_client_kick(void)
 {
     weather_client_invalidate();
     weather_client_request();
+}
+
+void weather_client_apply_lang(void)
+{
+    if (!s_mu) {
+        return;
+    }
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    if (s_wx.valid) {
+        strlcpy(s_wx.condition, weather_wmo_text(s_wx.wmo_code), sizeof(s_wx.condition));
+        for (int d = 0; d < WEATHER_DAYS; d++) {
+            strlcpy(s_wx.day[d].title, app_tr((app_str_id_t)(STR_TODAY + d)), sizeof(s_wx.day[d].title));
+            for (int k = 0; k < WEATHER_SLOTS; k++) {
+                if (s_wx.day[d].slot[k].valid) {
+                    strlcpy(s_wx.day[d].slot[k].condition, weather_wmo_text(s_wx.day[d].slot[k].wmo_code),
+                            sizeof(s_wx.day[d].slot[k].condition));
+                }
+            }
+        }
+    }
+    xSemaphoreGive(s_mu);
 }

@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "app_config.h"
+#include "app_i18n.h"
 #include "app_net.h"
 #include "app_wifi.h"
 #include "energy_model.h"
@@ -305,36 +306,36 @@ static void format_net_error(char *msg, size_t n, esp_err_t err)
     switch (err) {
     case ESP_ERR_TIMEOUT:
     case ESP_ERR_HTTP_READ_TIMEOUT:
-        snprintf(msg, n, "Timeout HTTP (%d ms)", ms);
+        snprintf(msg, n, app_tr(STR_ERR_TIMEOUT), ms);
         break;
     case ESP_ERR_HTTP_CONNECT:
     case ESP_ERR_HTTP_CONNECTING: {
         const char *alert = tls_alert_name(tls);
         if (alert) {
-            snprintf(msg, n, "TLS %s (%d ms)", alert, ms);
+            snprintf(msg, n, app_tr(STR_ERR_TLS), alert, ms);
         } else if (tls) {
-            snprintf(msg, n, "TLS/connect (%d ms, tls=%d)", ms, tls);
+            snprintf(msg, n, app_tr(STR_ERR_TLS_CONN), ms, tls);
         } else if (ms >= HTTP_TIMEOUT_MS - 500) {
-            snprintf(msg, n, "Timeout connect (%d ms)", ms);
+            snprintf(msg, n, app_tr(STR_ERR_TIMEOUT), ms);
         } else {
-            snprintf(msg, n, "Connessione HTTP (%d ms)", ms);
+            snprintf(msg, n, app_tr(STR_ERR_CONNECT), ms);
         }
         break;
     }
     case ESP_ERR_HTTP_CONNECTION_CLOSED:
-        snprintf(msg, n, "HTTP chiuso dal server (%d ms)", ms);
+        snprintf(msg, n, app_tr(STR_ERR_CLOSED), ms);
         break;
     case ESP_ERR_HTTP_FETCH_HEADER:
-        snprintf(msg, n, "Timeout header HTTP (%d ms)", ms);
+        snprintf(msg, n, app_tr(STR_ERR_HDR), ms);
         break;
     case ESP_ERR_HTTP_EAGAIN:
-        snprintf(msg, n, "HTTP EAGAIN (%d ms)", ms);
+        snprintf(msg, n, app_tr(STR_ERR_EAGAIN), ms);
         break;
     case ESP_ERR_NO_MEM:
-        snprintf(msg, n, "Memoria HTTP insufficiente");
+        snprintf(msg, n, "%s", app_tr(STR_ERR_MEM));
         break;
     default:
-        snprintf(msg, n, "Rete: %s (%d ms)", esp_err_to_name(err), ms);
+        snprintf(msg, n, app_tr(STR_ERR_NET), esp_err_to_name(err), ms);
         break;
     }
 }
@@ -478,17 +479,17 @@ static void set_http_error(int status, esp_err_t err, const char *fallback)
 {
     char msg[128];
     if (status == 401 || status == 403) {
-        snprintf(msg, sizeof(msg), "Token non valido (%d)", status);
+        snprintf(msg, sizeof(msg), app_tr(STR_ERR_TOKEN), status);
     } else if (status == 404) {
-        snprintf(msg, sizeof(msg), "Impianto non trovato (404)");
+        snprintf(msg, sizeof(msg), "%s", app_tr(STR_ERR_NOT_FOUND));
     } else if (status == 429) {
-        snprintf(msg, sizeof(msg), "Troppe richieste (429)");
+        snprintf(msg, sizeof(msg), "%s", app_tr(STR_ERR_429));
     } else if (status > 0) {
-        snprintf(msg, sizeof(msg), "Errore API HTTP %d", status);
+        snprintf(msg, sizeof(msg), app_tr(STR_ERR_HTTP), status);
     } else if (err != ESP_OK) {
         format_net_error(msg, sizeof(msg), err);
     } else {
-        strlcpy(msg, fallback ? fallback : "Errore di rete", sizeof(msg));
+        strlcpy(msg, fallback ? fallback : app_tr(STR_ERR_NET_PLAIN), sizeof(msg));
     }
     ESP_LOGW(TAG, "display: %s", msg);
     energy_model_set_error(msg);
@@ -808,7 +809,9 @@ static int bucket_cmp(const void *a, const void *b)
 
 static void weekday_label(const char *ymd, char *out, size_t n)
 {
-    static const char *wd[] = {"dom", "lun", "mar", "mer", "gio", "ven", "sab"};
+    static const char *wd_it[] = {"dom", "lun", "mar", "mer", "gio", "ven", "sab"};
+    static const char *wd_en[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    const char *const *wd = app_lang() == APP_LANG_EN ? wd_en : wd_it;
     int Y = 0, Mo = 0, D = 0;
     struct tm t = {0};
     if (sscanf(ymd, "%d-%d-%d", &Y, &Mo, &D) >= 3) {
@@ -1023,7 +1026,7 @@ static bool parse_period_energy(const char *body, energy_period_t *p, energy_ran
 
     if (range == ENERGY_RANGE_TODAY) {
         p->count = 1;
-        strlcpy(p->labels[0], "oggi", sizeof(p->labels[0]));
+        strlcpy(p->labels[0], app_tr(STR_TODAY), sizeof(p->labels[0]));
         int idx = bucket_find(days, nd, today_ymd);
         if (idx < 0 && nd > 0) {
             idx = nd - 1;
@@ -1230,7 +1233,7 @@ static esp_err_t resolve_site(const char *host, const char *token)
         return err;
     }
     if (status != 200 || !body) {
-        set_http_error(status, ESP_OK, "Impossibile elencare i dispositivi");
+        set_http_error(status, ESP_OK, app_tr(STR_ERR_PRODUCTS));
         free(body);
         return ESP_FAIL;
     }
@@ -1289,7 +1292,7 @@ static esp_err_t resolve_site(const char *host, const char *token)
         apply_site(chosen);
     } else if (!cfg.site_id[0]) {
         ESP_LOGW(TAG, "nessun energy_site_id in %d prodotti", n);
-        energy_model_set_error("Nessun Powerwall nell'account");
+        energy_model_set_error(app_tr(STR_ERR_NO_PW));
         cJSON_Delete(root);
         return ESP_ERR_NOT_FOUND;
     } else {
@@ -1326,7 +1329,7 @@ esp_err_t tesla_client_fetch_live(void)
     app_config_t cfg;
     app_config_get(&cfg);
     if (!cfg.api_token[0]) {
-        energy_model_set_error("Token API mancante");
+        energy_model_set_error(app_tr(STR_ERR_NO_TOKEN));
         return ESP_ERR_INVALID_STATE;
     }
     trim_slash(cfg.api_host);
@@ -1349,7 +1352,7 @@ esp_err_t tesla_client_fetch_live(void)
     int status = 0;
     esp_err_t err = http_get(url, cfg.api_token, &body, &status);
     if (err != ESP_OK) {
-        set_http_error(0, err, "Errore di rete");
+        set_http_error(0, err, app_tr(STR_ERR_NET_PLAIN));
         return err;
     }
     if (status != 200 || !body) {
@@ -1357,7 +1360,7 @@ esp_err_t tesla_client_fetch_live(void)
             s_site_resolved = false;
             s_resolved_id[0] = '\0';
         }
-        set_http_error(status, ESP_OK, "live_status fallito");
+        set_http_error(status, ESP_OK, app_tr(STR_ERR_LIVE_FAIL));
         ESP_LOGW(TAG, "live_status HTTP %d site=%s body=%.160s", status, cfg.site_id, body ? body : "");
         free(body);
         return ESP_FAIL;
@@ -1368,7 +1371,7 @@ esp_err_t tesla_client_fetch_live(void)
     if (!ok) {
         ESP_LOGW(TAG, "live parse fail body=%.160s", body);
         free(body);
-        energy_model_set_error("Risposta live non valida");
+        energy_model_set_error(app_tr(STR_ERR_LIVE));
         return ESP_FAIL;
     }
     free(body);
@@ -1415,7 +1418,7 @@ esp_err_t tesla_client_test(char *msg, size_t msg_len)
     app_config_t cfg;
     app_config_get(&cfg);
     if (!cfg.api_token[0]) {
-        snprintf(msg, msg_len, "Token mancante");
+        snprintf(msg, msg_len, "%s", app_tr(STR_ERR_TOKEN_MISS));
         return ESP_ERR_INVALID_STATE;
     }
     trim_slash(cfg.api_host);
@@ -1429,7 +1432,7 @@ esp_err_t tesla_client_test(char *msg, size_t msg_len)
         return err;
     }
     if (status != 200) {
-        snprintf(msg, msg_len, "HTTP %d", status);
+        snprintf(msg, msg_len, app_tr(STR_HTTP_N), status);
         free(body);
         return ESP_FAIL;
     }
@@ -1453,6 +1456,6 @@ esp_err_t tesla_client_test(char *msg, size_t msg_len)
         }
         cJSON_Delete(root);
     }
-    snprintf(msg, msg_len, "OK, %d disp. (%d energy) sito %s", count, energy_n, cfg.site_id);
+    snprintf(msg, msg_len, app_tr(STR_TEST_OK), count, energy_n, cfg.site_id);
     return ESP_OK;
 }

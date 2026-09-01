@@ -34,3 +34,4 @@ void weather_client_get(weather_t *out);
 void weather_client_invalidate(void);
 void weather_client_request(void);
 void weather_client_kick(void);
+void weather_client_apply_lang(void);

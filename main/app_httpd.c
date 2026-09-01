@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "app_i18n.h"
 #include "app_lte.h"
 #include "app_net.h"
 #include "app_ota.h"
@@ -89,31 +90,36 @@ static esp_err_t send_pin_page(httpd_req_t *req, const char *err)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Connection", "close");
-    const char *head =
-        "<!DOCTYPE html><html lang=\"it\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>PIN</title><style>"
-        "body{font-family:-apple-system,sans-serif;background:#000;color:#f5f5f5;"
-        "margin:0;padding:48px 24px;max-width:360px}"
-        "h1{font-size:22px;margin:0 0 8px}p{color:#9a9a9a;font-size:14px}"
-        "input{width:100%;box-sizing:border-box;background:#1c1c1e;color:#f5f5f5;"
-        "border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:24px;"
-        "letter-spacing:8px;text-align:center;margin:16px 0}"
-        "button{background:#2ee56b;color:#000;border:0;border-radius:8px;padding:12px 20px;"
-        "font-size:16px;font-weight:600;width:100%}"
-        ".err{color:#ff5a5a}"
-        "</style></head><body><h1>Impostazioni</h1><p>Inserisci il PIN</p>";
+    char head[1400];
+    snprintf(head, sizeof(head),
+             "<!DOCTYPE html><html lang=\"%s\"><head><meta charset=\"utf-8\">"
+             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+             "<title>PIN</title><style>"
+             "body{font-family:-apple-system,sans-serif;background:#000;color:#f5f5f5;"
+             "margin:0;padding:48px 24px;max-width:360px}"
+             "h1{font-size:22px;margin:0 0 8px}p{color:#9a9a9a;font-size:14px}"
+             "input{width:100%%;box-sizing:border-box;background:#1c1c1e;color:#f5f5f5;"
+             "border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:24px;"
+             "letter-spacing:8px;text-align:center;margin:16px 0}"
+             "button{background:#2ee56b;color:#000;border:0;border-radius:8px;padding:12px 20px;"
+             "font-size:16px;font-weight:600;width:100%%}"
+             ".err{color:#ff5a5a}"
+             "</style></head><body><h1>%s</h1><p>%s</p>",
+             app_lang() == APP_LANG_EN ? "en" : "it", app_tr(STR_PIN_TITLE), app_tr(STR_PIN_ENTER));
     httpd_resp_sendstr_chunk(req, head);
     if (err && err[0]) {
         httpd_resp_sendstr_chunk(req, "<p class=\"err\">");
         httpd_resp_sendstr_chunk(req, err);
         httpd_resp_sendstr_chunk(req, "</p>");
     }
-    httpd_resp_sendstr_chunk(req,
-                             "<form method=\"post\" action=\"/pin\">"
-                             "<input name=\"pin\" type=\"password\" inputmode=\"numeric\" "
-                             "pattern=\"[0-9]*\" maxlength=\"4\" autocomplete=\"off\" autofocus>"
-                             "<button type=\"submit\">Sblocca</button></form></body></html>");
+    char form[320];
+    snprintf(form, sizeof(form),
+             "<form method=\"post\" action=\"/pin\">"
+             "<input name=\"pin\" type=\"password\" inputmode=\"numeric\" "
+             "pattern=\"[0-9]*\" maxlength=\"4\" autocomplete=\"off\" autofocus>"
+             "<button type=\"submit\">%s</button></form></body></html>",
+             app_tr(STR_WEB_UNLOCK));
+    httpd_resp_sendstr_chunk(req, form);
     return httpd_resp_sendstr_chunk(req, NULL);
 }
 
@@ -178,9 +184,10 @@ static void after_web_save_task(void *arg)
         weather_client_kick();
     }
     ui_lock();
+    ui_apply_lang();
     ui_settings_reload();
     ui_refresh();
-    ui_settings_show_message("Salvato dal browser", false);
+    ui_settings_show_message(app_tr(STR_WEB_SAVED), false);
     if (!app_config_needs_wizard() && app_net_is_online()) {
         ui_show_wizard(false);
     }
@@ -283,8 +290,10 @@ static char *build_page(const char *flash)
     }
     html[0] = '\0';
 
+    append(&html, &len, &cap, "<!DOCTYPE html><html lang=\"");
+    append(&html, &len, &cap, app_lang() == APP_LANG_EN ? "en" : "it");
     append(&html, &len, &cap,
-           "<!DOCTYPE html><html lang=\"it\"><head><meta charset=\"utf-8\">"
+           "\"><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
            "<title>Powerwall LCD</title><style>"
            "body{font-family:-apple-system,sans-serif;background:#000;color:#f5f5f5;"
@@ -299,9 +308,12 @@ static char *build_page(const char *flash)
            ".ok{color:#2ee56b}.warn{color:#f5c542}.err{color:#ff5a5a}"
            "</style></head><body><h1>Powerwall LCD</h1>");
 
-    char line[384];
-    snprintf(line, sizeof(line), "<p>Pagina: http://%s</p>", ip);
+    char line[768];
+    snprintf(line, sizeof(line), "<p>");
     append(&html, &len, &cap, line);
+    snprintf(line, sizeof(line), app_tr(STR_WEB_PAGE), ip);
+    append(&html, &len, &cap, line);
+    append(&html, &len, &cap, "</p>");
 
     if (app_wifi_is_connected()) {
         snprintf(line, sizeof(line), "<p class=\"ok\">WiFi %s &middot; IP %s</p>",
@@ -316,7 +328,7 @@ static char *build_page(const char *flash)
                  APP_WIFI_AP_SSID, APP_WIFI_AP_PASS);
         append(&html, &len, &cap, line);
     } else {
-        snprintf(line, sizeof(line), "<p class=\"err\">Rete offline</p>");
+        snprintf(line, sizeof(line), "<p class=\"err\">%s</p>", app_tr(STR_WEB_OFFLINE));
         append(&html, &len, &cap, line);
     }
 
@@ -330,72 +342,94 @@ static char *build_page(const char *flash)
         append(&html, &len, &cap, line);
     }
 
-    append(&html, &len, &cap, "<h2>Rete WiFi di casa (2.4 GHz)</h2>"
-                              "<form method=\"post\" action=\"/wifi\">"
-                              "<label>SSID</label>");
-    snprintf(line, sizeof(line),
-             "<input name=\"ssid\" value=\"%s\" placeholder=\"nome rete 2.4 GHz\">", ssid_esc);
+    snprintf(line, sizeof(line), "<h2>%s</h2><form method=\"post\" action=\"/wifi\"><label>SSID</label>",
+             app_tr(STR_WEB_WIFI_HOME));
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap,
-           "<label>Password WiFi</label>"
-           "<input type=\"password\" name=\"pass\" placeholder=\"password della rete\">"
-           "<button type=\"submit\">Connetti WiFi</button></form>");
-
-    append(&html, &len, &cap, "<h2>4G LTE (A7670E)</h2>"
-                              "<p>Usato se la WiFi non c'è. In Italia APN tipici: internet, ibox.tim.it, web.omnitel.it, iliad.</p>"
-                              "<form method=\"post\" action=\"/save\">");
     snprintf(line, sizeof(line),
-             "<label>APN</label><input name=\"apn\" value=\"%s\" placeholder=\"internet\">", apn_esc);
+             "<input name=\"ssid\" value=\"%s\" placeholder=\"%s\">", ssid_esc, app_tr(STR_WEB_SSID_PH));
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap,
-           "<label>PIN SIM (se richiesto)</label>"
-           "<input type=\"password\" name=\"simpin\" placeholder=\"vuoto = nessun PIN\">"
-           "<button type=\"submit\">Salva APN</button></form>");
+    snprintf(line, sizeof(line),
+             "<label>%s</label>"
+             "<input type=\"password\" name=\"pass\" placeholder=\"%s\">"
+             "<button type=\"submit\">%s</button></form>",
+             app_tr(STR_WIFI_PASS), app_tr(STR_WEB_PASS_PH), app_tr(STR_WEB_WIFI_BTN));
+    append(&html, &len, &cap, line);
 
-    append(&html, &len, &cap, "<h2>Token MyTeslaMate</h2><form method=\"post\" action=\"/save\">");
+    snprintf(line, sizeof(line), "<h2>%s</h2><p>%s</p><form method=\"post\" action=\"/save\">",
+             app_tr(STR_WEB_LTE), app_tr(STR_WEB_LTE_P));
+    append(&html, &len, &cap, line);
+    snprintf(line, sizeof(line),
+             "<label>%s</label><input name=\"apn\" value=\"%s\" placeholder=\"internet\">",
+             app_tr(STR_WEB_APN), apn_esc);
+    append(&html, &len, &cap, line);
+    snprintf(line, sizeof(line),
+             "<label>%s</label>"
+             "<input type=\"password\" name=\"simpin\" placeholder=\"%s\">"
+             "<button type=\"submit\">%s</button></form>",
+             app_tr(STR_WEB_SIMPIN), app_tr(STR_WEB_SIMPIN_PH), app_tr(STR_WEB_SAVE_APN));
+    append(&html, &len, &cap, line);
+
+    snprintf(line, sizeof(line), "<h2>%s</h2><form method=\"post\" action=\"/save\">", app_tr(STR_WEB_TOKEN_H));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line), "<p class=\"%s\">%s</p>", cfg.api_token[0] ? "ok" : "warn",
-             cfg.api_token[0] ? "Token già impostato." : "Token mancante.");
+             cfg.api_token[0] ? app_tr(STR_WEB_TOKEN_OK) : app_tr(STR_WEB_TOKEN_MISS));
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap,
-           "<label>Token</label>"
-           "<textarea name=\"token\" placeholder=\"Incolla il token (vuoto = non cambiare)\"></textarea>"
-           "<label>Host API</label>");
+    snprintf(line, sizeof(line),
+             "<label>Token</label>"
+             "<textarea name=\"token\" placeholder=\"%s\"></textarea>"
+             "<label>%s</label>",
+             app_tr(STR_WEB_TOKEN_PH), app_tr(STR_API_HOST));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line), "<input name=\"host\" value=\"%s\">", host_esc);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap, "<label>Energy site id</label>");
+    snprintf(line, sizeof(line), "<label>%s</label>", app_tr(STR_SITE_ID));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line), "<input name=\"site\" value=\"%s\">", site_esc);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap, "<label>Latitudine</label>");
+    snprintf(line, sizeof(line), "<label>%s</label>", app_tr(STR_LAT));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line),
              "<input name=\"lat\" value=\"%s\" placeholder=\"45.1234\" inputmode=\"decimal\">", lat_esc);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap, "<label>Longitudine</label>");
+    snprintf(line, sizeof(line), "<label>%s</label>", app_tr(STR_LON));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line),
              "<input name=\"lon\" value=\"%s\" placeholder=\"9.1234\" inputmode=\"decimal\">", lon_esc);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap, "<label>Frequenza API TeslaMate (secondi, 5–300)</label>");
+    snprintf(line, sizeof(line), "<label>%s</label>", app_tr(STR_WEB_POLL));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line),
              "<input name=\"poll\" value=\"%u\" inputmode=\"numeric\" min=\"5\" max=\"300\">",
              (unsigned)cfg.poll_s);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap, "<label>Aggiornamento meteo (minuti, 1–120)</label>");
+    snprintf(line, sizeof(line), "<label>%s</label>", app_tr(STR_WEB_WXMIN));
+    append(&html, &len, &cap, line);
     snprintf(line, sizeof(line),
              "<input name=\"wxmin\" value=\"%u\" inputmode=\"numeric\" min=\"1\" max=\"120\">",
              (unsigned)cfg.wx_poll_min);
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap,
-           "<button type=\"submit\">Salva token</button></form>");
-
-    append(&html, &len, &cap, "<h2>Aggiornamento firmware (OTA)</h2>");
-    snprintf(line, sizeof(line), "<p>Versione attuale: <b>%s</b></p>", app_ota_version());
+    snprintf(line, sizeof(line),
+             "<label>%s</label><select name=\"lang\">"
+             "<option value=\"0\"%s>Italiano</option>"
+             "<option value=\"1\"%s>English</option></select>",
+             app_tr(STR_LANG), cfg.lang == 0 ? " selected" : "", cfg.lang == 1 ? " selected" : "");
     append(&html, &len, &cap, line);
-    append(&html, &len, &cap,
-           "<form method=\"post\" action=\"/ota\" enctype=\"multipart/form-data\">"
-           "<label>File .bin (idf.py build)</label>"
-           "<input type=\"file\" name=\"firmware\" accept=\".bin,application/octet-stream\">"
-           "<button type=\"submit\">Carica e riavvia</button></form>"
-           "<p>Il pannello vede solo reti 2.4 GHz. Meteo e 4G restano spenti finché non imposti GPS e APN. "
-           "L'IP resta in Impostazioni sul display.</p></body></html>");
+    snprintf(line, sizeof(line), "<button type=\"submit\">%s</button></form>", app_tr(STR_WEB_SAVE_TOKEN));
+    append(&html, &len, &cap, line);
+
+    snprintf(line, sizeof(line), "<h2>%s</h2>", app_tr(STR_WEB_OTA));
+    append(&html, &len, &cap, line);
+    append(&html, &len, &cap, "<p>");
+    snprintf(line, sizeof(line), app_tr(STR_WEB_VER), app_ota_version());
+    append(&html, &len, &cap, line);
+    append(&html, &len, &cap, "</p>");
+    snprintf(line, sizeof(line),
+             "<form method=\"post\" action=\"/ota\" enctype=\"multipart/form-data\">"
+             "<label>%s</label>"
+             "<input type=\"file\" name=\"firmware\" accept=\".bin,application/octet-stream\">"
+             "<button type=\"submit\">%s</button></form><p>%s</p></body></html>",
+             app_tr(STR_WEB_BIN), app_tr(STR_WEB_UPLOAD), app_tr(STR_WEB_FOOT));
+    append(&html, &len, &cap, line);
     return html;
 }
 
@@ -427,14 +461,14 @@ static esp_err_t on_post_pin(httpd_req_t *req)
 {
     char *body = NULL;
     if (recv_body(req, &body) != ESP_OK) {
-        return send_pin_page(req, "Richiesta non valida.");
+        return send_pin_page(req, app_tr(STR_WEB_BAD_REQ));
     }
     char pin[12];
     form_get(body, "pin", pin, sizeof(pin));
     free(body);
 
     if (strcmp(pin, APP_SETTINGS_PIN) != 0) {
-        return send_pin_page(req, "PIN errato.");
+        return send_pin_page(req, app_tr(STR_PIN_WRONG));
     }
 
     httpd_resp_set_status(req, "302 Found");
@@ -478,6 +512,7 @@ static esp_err_t on_post_save(httpd_req_t *req)
     char simpin[APP_LTE_PIN_MAX];
     char poll[8];
     char wxmin[8];
+    char langb[4];
     form_get(body, "token", token, sizeof(token));
     form_get(body, "host", host, sizeof(host));
     form_get(body, "site", site, sizeof(site));
@@ -487,6 +522,7 @@ static esp_err_t on_post_save(httpd_req_t *req)
     form_get(body, "simpin", simpin, sizeof(simpin));
     bool has_poll = form_get(body, "poll", poll, sizeof(poll));
     bool has_wx = form_get(body, "wxmin", wxmin, sizeof(wxmin));
+    bool has_lang = form_get(body, "lang", langb, sizeof(langb));
     free(body);
 
     if (token[0]) {
@@ -513,12 +549,15 @@ static esp_err_t on_post_save(httpd_req_t *req)
         uint16_t wm = (has_wx && wxmin[0]) ? (uint16_t)atoi(wxmin) : cfg.wx_poll_min;
         app_config_set_polls(ps, wm);
     }
+    if (has_lang) {
+        app_config_set_lang(langb[0] == '1' ? 1 : 0);
+    }
     if (app_config_has_gps()) {
         weather_client_kick();
     }
     esp_err_t err = app_config_save();
     xTaskCreate(after_web_save_task, "web_save", 8192, NULL, 4, NULL);
-    return send_page(req, err == ESP_OK ? "Salvato." : "Errore NVS.");
+    return send_page(req, err == ESP_OK ? app_tr(STR_WEB_OK) : app_tr(STR_WEB_NVS));
 }
 
 static esp_err_t on_post_wifi(httpd_req_t *req)
@@ -538,7 +577,7 @@ static esp_err_t on_post_wifi(httpd_req_t *req)
     free(body);
 
     if (!ssid[0]) {
-        return send_page(req, "Seleziona una rete.");
+        return send_page(req, app_tr(STR_WEB_PICK));
     }
     app_config_set_wifi(ssid, pass);
     app_config_save();
@@ -546,12 +585,15 @@ static esp_err_t on_post_wifi(httpd_req_t *req)
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Refresh", "8;url=/");
-    const char *msg =
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"8;url=/\">"
-        "<title>Connessione</title></head><body style=\"background:#000;color:#f5f5f5;font-family:sans-serif;padding:24px\">"
-        "<h1>Connessione in corso…</h1><p>Attendi, la pagina si aggiorna da sola.</p>"
-        "<p>Se il telefono perde la rete, torna sul WiFi di casa e apri l'IP in Impostazioni sul display.</p>"
-        "</body></html>";
+    char msg[640];
+    snprintf(msg, sizeof(msg),
+             "<!DOCTYPE html><html lang=\"%s\"><head><meta charset=\"utf-8\">"
+             "<meta http-equiv=\"refresh\" content=\"8;url=/\">"
+             "<title>%s</title></head>"
+             "<body style=\"background:#000;color:#f5f5f5;font-family:sans-serif;padding:24px\">"
+             "<h1>%s</h1><p>%s</p><p>%s</p></body></html>",
+             app_lang() == APP_LANG_EN ? "en" : "it", app_tr(STR_WEB_CONN_H), app_tr(STR_WEB_CONN_H),
+             app_tr(STR_WEB_CONN_P), app_tr(STR_WEB_CONN_FOOT));
     return httpd_resp_send(req, msg, HTTPD_RESP_USE_STRLEN);
 }
 

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "app_i18n.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -47,8 +48,8 @@ void energy_model_init(void)
 {
     s_mu = xSemaphoreCreateMutex();
     memset(&s_state, 0, sizeof(s_state));
-    strlcpy(s_state.live.status, "In attesa", sizeof(s_state.live.status));
-    energy_model_log_event("avvio, in attesa del poll");
+    strlcpy(s_state.live.status, app_tr(STR_WAITING), sizeof(s_state.live.status));
+    energy_model_log_event(app_tr(STR_BOOT));
 }
 
 void energy_model_get(energy_state_t *out)
@@ -144,18 +145,20 @@ void energy_model_format_reads(char *buf, size_t n)
     xSemaphoreTake(s_mu, portMAX_DELAY);
     if (s_state.read_n == 0) {
         xSemaphoreGive(s_mu);
-        strlcpy(buf, "Nessuna lettura ancora.", n);
+        strlcpy(buf, app_tr(STR_NO_READS), n);
         return;
     }
     for (uint8_t i = 0; i < s_state.read_n && i < ENERGY_READ_LOG; i++) {
         const energy_read_log_t *e = &s_state.reads[i];
         char line[160];
         if (e->ok) {
-            snprintf(line, sizeof(line), "%s  ok  sol %.1fkW  casa %.1fkW  batt %.1fkW  rete %.1fkW  %.0f%%\n",
-                     e->time, e->solar_w / 1000.0f, e->home_w / 1000.0f, e->battery_w / 1000.0f,
+            snprintf(line, sizeof(line),
+                     "%s  %s  %s %.1fkW  %s %.1fkW  %s %.1fkW  %s %.1fkW  %.0f%%\n", e->time,
+                     app_tr(STR_LOG_OK), app_tr(STR_LOG_SOL), e->solar_w / 1000.0f, app_tr(STR_LOG_HOME),
+                     e->home_w / 1000.0f, app_tr(STR_LOG_BATT), e->battery_w / 1000.0f, app_tr(STR_LOG_GRID),
                      e->grid_w / 1000.0f, e->soc_pct);
         } else {
-            snprintf(line, sizeof(line), "%s  %s\n", e->time, e->note[0] ? e->note : "errore");
+            snprintf(line, sizeof(line), "%s  %s\n", e->time, e->note[0] ? e->note : app_tr(STR_LOG_ERR));
         }
         strlcat(buf, line, n);
     }
@@ -168,16 +171,30 @@ void energy_model_derive_status(energy_live_t *live)
         return;
     }
     if (live->battery_w > 150.0f) {
-        strlcpy(live->status, "In scarica", sizeof(live->status));
+        strlcpy(live->status, app_tr(STR_ST_DISCHARGE), sizeof(live->status));
     } else if (live->battery_w < -150.0f) {
-        strlcpy(live->status, "In carica", sizeof(live->status));
+        strlcpy(live->status, app_tr(STR_ST_CHARGE), sizeof(live->status));
     } else if (live->solar_w > 200.0f && live->grid_w < 100.0f) {
-        strlcpy(live->status, "Autoconsumo", sizeof(live->status));
+        strlcpy(live->status, app_tr(STR_ST_SELF), sizeof(live->status));
     } else if (live->grid_w > 150.0f) {
-        strlcpy(live->status, "Dalla rete", sizeof(live->status));
+        strlcpy(live->status, app_tr(STR_ST_GRID), sizeof(live->status));
     } else {
-        strlcpy(live->status, "Inattivo", sizeof(live->status));
+        strlcpy(live->status, app_tr(STR_ST_IDLE), sizeof(live->status));
     }
+}
+
+void energy_model_apply_lang(void)
+{
+    if (!s_mu) {
+        return;
+    }
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    if (s_state.live.valid) {
+        energy_model_derive_status(&s_state.live);
+    } else {
+        strlcpy(s_state.live.status, app_tr(STR_WAITING), sizeof(s_state.live.status));
+    }
+    xSemaphoreGive(s_mu);
 }
 
 void energy_fmt_kw(char *buf, size_t n, float watts)

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "ui_theme.h"
+#include "weather_client.h"
 
 static const char *TAG = "ui";
 
@@ -330,6 +331,8 @@ void ui_init(void)
 
 void ui_apply_lang(void)
 {
+    energy_model_apply_lang();
+    weather_client_apply_lang();
     if (s_tv) {
         s_tab_map[0] = app_tr(STR_TAB_LIVE);
         s_tab_map[1] = app_tr(STR_TAB_ENERGY);

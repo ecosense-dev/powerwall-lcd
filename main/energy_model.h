@@ -89,6 +89,7 @@ void energy_model_set_status(const char *status);
 void energy_model_log_event(const char *note);
 void energy_model_format_reads(char *buf, size_t n);
 void energy_model_derive_status(energy_live_t *live);
+void energy_model_apply_lang(void);
 bool energy_model_live_valid(void);
 void energy_fmt_kw(char *buf, size_t n, float watts);
 void energy_fmt_kwh(char *buf, size_t n, float kwh);
