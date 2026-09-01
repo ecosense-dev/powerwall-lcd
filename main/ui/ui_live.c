@@ -540,7 +540,7 @@ void ui_live_update(const energy_state_t *st)
         if (soc > 100) {
             soc = 100;
         }
-        snprintf(buf, sizeof(buf), "%s · %.0f%%%s", kw, soc, dir);
+        snprintf(buf, sizeof(buf), "%s  %.0f%%%s", kw, soc, dir);
         ui_icon_battery_set_soc(s_batt_fill, l->soc_pct);
         batt_set_charging(l->battery_w < -FLOW_THRESH_W);
     } else {
