@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "app_i18n.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "ui_theme.h"
@@ -20,6 +21,9 @@ static lv_obj_t *s_kb_target;
 static lv_obj_t *s_pin_gate;
 static lv_obj_t *s_pin_dots;
 static lv_obj_t *s_pin_err;
+static lv_obj_t *s_pin_title;
+static lv_obj_t *s_pin_sub;
+static const char *s_tab_map[4];
 static char s_pin[PIN_MAX_LEN + 1];
 static bool s_settings_unlocked;
 
@@ -150,7 +154,7 @@ static void pin_try(void)
         return;
     }
     pin_reset();
-    lv_label_set_text(s_pin_err, "PIN errato");
+    lv_label_set_text(s_pin_err, app_tr(STR_PIN_WRONG));
     lv_obj_set_style_text_color(s_pin_err, COL_DANGER, 0);
 }
 
@@ -182,7 +186,7 @@ static void pin_ok_cb(lv_event_t *e)
     if (strlen(s_pin) == PIN_MAX_LEN) {
         pin_try();
     } else {
-        lv_label_set_text(s_pin_err, "Inserisci 4 cifre");
+        lv_label_set_text(s_pin_err, app_tr(STR_PIN_DIGITS));
         lv_obj_set_style_text_color(s_pin_err, COL_MUTED, 0);
     }
 }
@@ -214,13 +218,13 @@ static void pin_create(lv_obj_t *scr)
     lv_obj_clear_flag(s_pin_gate, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pin_gate, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *title = ui_label(s_pin_gate, &lv_font_montserrat_24, COL_TEXT);
-    lv_label_set_text(title, "Impostazioni");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+    s_pin_title = ui_label(s_pin_gate, &lv_font_montserrat_24, COL_TEXT);
+    lv_label_set_text(s_pin_title, app_tr(STR_PIN_TITLE));
+    lv_obj_align(s_pin_title, LV_ALIGN_TOP_MID, 0, 16);
 
-    lv_obj_t *sub = ui_label(s_pin_gate, &lv_font_montserrat_14, COL_MUTED);
-    lv_label_set_text(sub, "Inserisci il PIN");
-    lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 50);
+    s_pin_sub = ui_label(s_pin_gate, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(s_pin_sub, app_tr(STR_PIN_ENTER));
+    lv_obj_align(s_pin_sub, LV_ALIGN_TOP_MID, 0, 50);
 
     s_pin_dots = ui_label(s_pin_gate, &lv_font_montserrat_28, COL_TEXT);
     lv_label_set_text(s_pin_dots, "----");
@@ -285,9 +289,9 @@ void ui_init(void)
     lv_obj_set_style_anim_time(lv_tabview_get_content(s_tv), 0, 0);
     style_tabview(s_tv);
 
-    lv_obj_t *tab_live = lv_tabview_add_tab(s_tv, "Live");
-    lv_obj_t *tab_en = lv_tabview_add_tab(s_tv, "Energia");
-    lv_obj_t *tab_set = lv_tabview_add_tab(s_tv, "Impostazioni");
+    lv_obj_t *tab_live = lv_tabview_add_tab(s_tv, app_tr(STR_TAB_LIVE));
+    lv_obj_t *tab_en = lv_tabview_add_tab(s_tv, app_tr(STR_TAB_ENERGY));
+    lv_obj_t *tab_set = lv_tabview_add_tab(s_tv, app_tr(STR_TAB_SETTINGS));
     ui_style_screen(tab_live);
     ui_style_screen(tab_en);
     ui_style_screen(tab_set);
@@ -322,6 +326,26 @@ void ui_init(void)
     }
 
     ESP_LOGI(TAG, "UI ready");
+}
+
+void ui_apply_lang(void)
+{
+    if (s_tv) {
+        s_tab_map[0] = app_tr(STR_TAB_LIVE);
+        s_tab_map[1] = app_tr(STR_TAB_ENERGY);
+        s_tab_map[2] = app_tr(STR_TAB_SETTINGS);
+        s_tab_map[3] = "";
+        lv_btnmatrix_set_map(lv_tabview_get_tab_btns(s_tv), s_tab_map);
+    }
+    if (s_pin_title) {
+        lv_label_set_text(s_pin_title, app_tr(STR_PIN_TITLE));
+    }
+    if (s_pin_sub) {
+        lv_label_set_text(s_pin_sub, app_tr(STR_PIN_ENTER));
+    }
+    ui_live_apply_lang();
+    ui_energy_apply_lang();
+    ui_settings_apply_lang();
 }
 
 void ui_show_wizard(bool show)

@@ -44,6 +44,7 @@ typedef struct {
     char lte_pass[APP_LTE_PASS_MAX];
     uint16_t poll_s;
     uint16_t wx_poll_min;
+    uint8_t lang;
 } app_config_t;
 
 esp_err_t app_config_init(void);
@@ -66,5 +67,6 @@ void app_config_set_site_name(const char *site_name);
 void app_config_set_gps(const char *lat, const char *lon);
 void app_config_set_lte(const char *apn, const char *pin, const char *user, const char *pass);
 void app_config_set_polls(uint16_t tesla_s, uint16_t wx_min);
+void app_config_set_lang(uint8_t lang);
 bool app_config_has_gps(void);
 bool app_config_parse_gps(float *lat, float *lon);

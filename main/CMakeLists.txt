@@ -13,6 +13,7 @@ idf_component_register(
         "app_net.c"
         "app_lte.c"
         "app_ota.c"
+        "app_i18n.c"
         "ui/ui.c"
         "ui/ui_live.c"
         "ui/ui_icons.c"

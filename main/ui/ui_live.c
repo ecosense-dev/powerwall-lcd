@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "app_i18n.h"
 #include "app_net.h"
 #include "app_tz.h"
 #include "app_wifi.h"
@@ -39,6 +40,9 @@ static lv_obj_t *s_solar_v;
 static lv_obj_t *s_home_v;
 static lv_obj_t *s_pw_v;
 static lv_obj_t *s_grid_v;
+static lv_obj_t *s_t_solar;
+static lv_obj_t *s_t_home;
+static lv_obj_t *s_t_grid;
 static lv_obj_t *s_batt_fill;
 static lv_point_t s_pts_sh[2];
 static lv_point_t s_pts_hp[2];
@@ -286,8 +290,14 @@ void ui_live_create(lv_obj_t *parent)
     lv_label_set_text(s_wx_cond, "");
     lv_obj_set_pos(s_wx_cond, 44, 28);
 
-    static const char *when_lbl[WEATHER_SLOTS] = {"Mattina", "Pomer.", "Sera"};
-    static const char *day_lbl[WEATHER_DAYS] = {"Oggi", "Domani", "Dopodomani"};
+    static const char *when_lbl[WEATHER_SLOTS];
+    when_lbl[0] = app_tr(STR_MORNING);
+    when_lbl[1] = app_tr(STR_AFTERNOON);
+    when_lbl[2] = app_tr(STR_EVENING);
+    static const char *day_lbl[WEATHER_DAYS];
+    day_lbl[0] = app_tr(STR_TODAY);
+    day_lbl[1] = app_tr(STR_TOMORROW);
+    day_lbl[2] = app_tr(STR_DAY_AFTER);
     for (int d = 0; d < WEATHER_DAYS; d++) {
         lv_obj_t *card = make_card(parent, WX_COL_X, 64 + d * 118, WX_COL_W, 112);
         s_fc[d].title = ui_label(card, &lv_font_montserrat_14, COL_TEXT);
@@ -299,7 +309,7 @@ void ui_live_create(lv_obj_t *parent)
     }
 
     s_site = ui_label(parent, &lv_font_montserrat_24, COL_TEXT);
-    lv_label_set_text(s_site, "Impianto");
+    lv_label_set_text(s_site, app_tr(STR_SITE));
     lv_obj_align(s_site, LV_ALIGN_TOP_LEFT, 16, 8);
     lv_obj_set_width(s_site, 268);
     lv_label_set_long_mode(s_site, LV_LABEL_LONG_DOT);
@@ -315,7 +325,7 @@ void ui_live_create(lv_obj_t *parent)
     clock_paint();
 
     s_status = ui_label(parent, &lv_font_montserrat_16, COL_STATUS);
-    lv_label_set_text(s_status, "In attesa");
+    lv_label_set_text(s_status, app_tr(STR_WAITING));
     lv_obj_align(s_status, LV_ALIGN_TOP_LEFT, 16, 38);
 
     s_err = ui_label(parent, &lv_font_montserrat_12, COL_DANGER);
@@ -354,12 +364,12 @@ void ui_live_create(lv_obj_t *parent)
     ui_icon_battery(parent, px, py, &s_batt_fill);
     ui_icon_pylon(parent, gx, gy);
 
-    (void)make_caption(parent, sx, sy - 50, "Solare", &s_solar_v);
-    lv_obj_t *home_title = make_caption(parent, hx, hy - 50, "Casa", &s_home_v);
+    s_t_solar = make_caption(parent, sx, sy - 50, app_tr(STR_SOLAR), &s_solar_v);
+    s_t_home = make_caption(parent, hx, hy - 50, app_tr(STR_HOME), &s_home_v);
     (void)make_caption(parent, px, py - 50, "Powerwall", &s_pw_v);
-    (void)make_caption(parent, gx, gy - 50, "Rete", &s_grid_v);
+    s_t_grid = make_caption(parent, gx, gy - 50, app_tr(STR_GRID), &s_grid_v);
     caption_right_of_line(s_solar_v, sx, sy - 50 + 94);
-    caption_right_of_line(home_title, hx, hy - 50);
+    caption_right_of_line(s_t_home, hx, hy - 50);
     lv_obj_set_width(s_pw_v, 156);
     lv_label_set_long_mode(s_pw_v, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_pw_v, LV_TEXT_ALIGN_CENTER, 0);
@@ -413,10 +423,9 @@ static void wx_set(const char *temp, lv_color_t temp_c, const char *cond, lv_col
 
 static void forecast_set(const weather_t *wx)
 {
-    static const char *fallback[WEATHER_DAYS] = {"Oggi", "Domani", "Dopodomani"};
+    const char *fallback[WEATHER_DAYS] = {app_tr(STR_TODAY), app_tr(STR_TOMORROW), app_tr(STR_DAY_AFTER)};
     for (int d = 0; d < WEATHER_DAYS; d++) {
-        const char *title = wx && wx->day[d].title[0] ? wx->day[d].title : fallback[d];
-        label_set(s_fc[d].title, title);
+        label_set(s_fc[d].title, fallback[d]);
         for (int k = 0; k < WEATHER_SLOTS; k++) {
             const weather_slot_t *sl = wx ? &wx->day[d].slot[k] : NULL;
             if (sl && sl->valid) {
@@ -444,15 +453,15 @@ void ui_live_update(const energy_state_t *st)
     }
 
     const energy_live_t *l = &st->live;
-    label_set(s_site, l->site_name[0] ? l->site_name : "Impianto");
-    label_set(s_status, l->status[0] ? l->status : "In attesa");
+    label_set(s_site, l->site_name[0] ? l->site_name : app_tr(STR_SITE));
+    label_set(s_status, l->status[0] ? l->status : app_tr(STR_WAITING));
     lv_obj_set_style_text_color(s_status, COL_STATUS, 0);
     clock_paint();
 
     weather_t wx;
     weather_client_get(&wx);
     if (app_wifi_ap_is_up() && !app_net_is_online()) {
-        wx_set(APP_WIFI_AP_SSID, COL_STATUS, "setup WiFi", COL_MUTED, 0, false);
+        wx_set(APP_WIFI_AP_SSID, COL_STATUS, app_tr(STR_SETUP_WIFI), COL_MUTED, 0, false);
         forecast_set(NULL);
     } else if (wx.valid) {
         char t[16];
@@ -460,21 +469,21 @@ void ui_live_update(const energy_state_t *st)
         wx_set(t, wx_color(wx.wmo_code), wx.condition, COL_MUTED, wx.wmo_code, true);
         forecast_set(&wx);
     } else if (!app_config_has_gps()) {
-        wx_set("Meteo", COL_MUTED, "imposta GPS", COL_MUTED, 0, false);
+        wx_set(app_tr(STR_WX), COL_MUTED, app_tr(STR_SET_GPS), COL_MUTED, 0, false);
         forecast_set(NULL);
     } else if (!app_net_is_online()) {
-        wx_set("Meteo", COL_DANGER, "rete offline", COL_DANGER, 0, false);
+        wx_set(app_tr(STR_WX), COL_DANGER, app_tr(STR_NET_OFFLINE), COL_DANGER, 0, false);
         forecast_set(NULL);
     } else {
-        wx_set("Meteo", COL_MUTED, "...", COL_MUTED, 0, false);
+        wx_set(app_tr(STR_WX), COL_MUTED, "...", COL_MUTED, 0, false);
         forecast_set(&wx);
     }
 
     if (st->fetching) {
-        label_set(s_status, "Lettura in corso...");
+        label_set(s_status, app_tr(STR_READING));
         lv_obj_set_style_text_color(s_status, COL_STATUS, 0);
     } else if (app_net_is_online() && !l->status[0]) {
-        label_set(s_status, app_net_kind() == APP_NET_LTE ? "In rete (4G)" : "In rete");
+        label_set(s_status, app_net_kind() == APP_NET_LTE ? app_tr(STR_ONLINE_4G) : app_tr(STR_ONLINE));
     }
 
     if (st->last_error[0]) {
@@ -482,18 +491,17 @@ void ui_live_update(const energy_state_t *st)
         lv_obj_set_style_text_color(s_err, COL_DANGER, 0);
     } else if (app_net_is_online() && app_net_ip()[0] && !app_config_has_token()) {
         char hint[96];
-        snprintf(hint, sizeof(hint), "Token: apri http://%s dal browser", app_net_ip());
+        snprintf(hint, sizeof(hint), app_tr(STR_TOKEN_HINT), app_net_ip());
         label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_STATUS, 0);
     } else if (app_net_is_online() && app_net_ip()[0]) {
         char hint[80];
-        snprintf(hint, sizeof(hint), "Config: http://%s", app_net_ip());
+        snprintf(hint, sizeof(hint), app_tr(STR_CONFIG_HINT), app_net_ip());
         label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_MUTED, 0);
     } else if (app_wifi_ap_is_up()) {
         char hint[128];
-        snprintf(hint, sizeof(hint), "Collegati a %s  (password %s)  poi apri http://%s", APP_WIFI_AP_SSID,
-                 APP_WIFI_AP_PASS, APP_WIFI_AP_IP);
+        snprintf(hint, sizeof(hint), app_tr(STR_AP_HINT), APP_WIFI_AP_SSID, APP_WIFI_AP_PASS, APP_WIFI_AP_IP);
         label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_STATUS, 0);
     } else if (app_wifi_last_error()[0]) {
@@ -521,9 +529,9 @@ void ui_live_update(const energy_state_t *st)
         energy_fmt_kw(kw, sizeof(kw), l->battery_w < 0 ? -l->battery_w : l->battery_w);
         const char *dir = "";
         if (l->battery_w < -FLOW_THRESH_W) {
-            dir = "  carica";
+            dir = app_tr(STR_DIR_CHARGE);
         } else if (l->battery_w > FLOW_THRESH_W) {
-            dir = "  scarica";
+            dir = app_tr(STR_DIR_DISCHARGE);
         }
         float soc = l->soc_pct;
         if (soc < 0) {
@@ -573,4 +581,28 @@ void ui_live_update(const energy_state_t *st)
     flow_set(&s_flow[0], solar_dir, COL_SOLAR, ok ? l->solar_w : 0);
     flow_set(&s_flow[1], batt_dir, COL_PW, ok ? l->battery_w : 0);
     flow_set(&s_flow[2], grid_dir, grid_dir < 0 ? COL_HOME_BLUE : COL_GRID, ok ? l->grid_w : 0);
+}
+
+void ui_live_apply_lang(void)
+{
+    if (s_t_solar) {
+        lv_label_set_text(s_t_solar, app_tr(STR_SOLAR));
+    }
+    if (s_t_home) {
+        lv_label_set_text(s_t_home, app_tr(STR_HOME));
+    }
+    if (s_t_grid) {
+        lv_label_set_text(s_t_grid, app_tr(STR_GRID));
+    }
+    const char *when[WEATHER_SLOTS] = {app_tr(STR_MORNING), app_tr(STR_AFTERNOON), app_tr(STR_EVENING)};
+    for (int d = 0; d < WEATHER_DAYS; d++) {
+        if (s_fc[d].title) {
+            lv_label_set_text(s_fc[d].title, app_tr((app_str_id_t)(STR_TODAY + d)));
+        }
+        for (int k = 0; k < WEATHER_SLOTS; k++) {
+            if (s_fc[d].slot[k].when) {
+                lv_label_set_text(s_fc[d].slot[k].when, when[k]);
+            }
+        }
+    }
 }

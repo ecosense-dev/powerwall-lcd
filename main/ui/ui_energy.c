@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app_i18n.h"
 #include "ui_theme.h"
 
 static lv_obj_t *s_when;
@@ -19,6 +20,8 @@ static lv_obj_t *s_mix_grid;
 static lv_obj_t *s_mix_home_kwh;
 static lv_obj_t *s_mix_pw_kwh;
 static lv_obj_t *s_mix_grid_kwh;
+static lv_obj_t *s_flow_title;
+static lv_obj_t *s_used_title;
 static char s_xlbl[8][8];
 static uint8_t s_xmaj = 2;
 
@@ -223,7 +226,7 @@ static void update_flow(const energy_period_t *p)
     int pg = (int)(to_grid * 100.0f / tot + 0.5f);
 
     char b[48];
-    snprintf(b, sizeof(b), "%d%%  Casa", ph);
+    snprintf(b, sizeof(b), "%d%%  %s", ph, app_tr(STR_HOME));
     label_set(s_mix_home, b);
     snprintf(b, sizeof(b), "%.1f kWh", to_home);
     label_set(s_mix_home_kwh, b);
@@ -233,7 +236,7 @@ static void update_flow(const energy_period_t *p)
     snprintf(b, sizeof(b), "%.1f kWh", to_batt);
     label_set(s_mix_pw_kwh, b);
 
-    snprintf(b, sizeof(b), "%d%%  Rete", pg);
+    snprintf(b, sizeof(b), "%d%%  %s", pg, app_tr(STR_GRID));
     label_set(s_mix_grid, b);
     snprintf(b, sizeof(b), "%.1f kWh", to_grid);
     label_set(s_mix_grid_kwh, b);
@@ -241,7 +244,7 @@ static void update_flow(const energy_period_t *p)
 
 static void apply_state(const energy_state_t *st)
 {
-    label_set(s_when, "Oggi");
+    label_set(s_when, app_tr(STR_TODAY));
     if (st->day.valid) {
         fill_chart_day(&st->day);
     }
@@ -274,11 +277,11 @@ static lv_obj_t *dot(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t co
 void ui_energy_create(lv_obj_t *parent)
 {
     s_when = ui_label(parent, &lv_font_montserrat_20, COL_TEXT);
-    lv_label_set_text(s_when, "Oggi");
+    lv_label_set_text(s_when, app_tr(STR_TODAY));
     lv_obj_align(s_when, LV_ALIGN_TOP_LEFT, 12, 6);
 
     s_sub = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
-    lv_label_set_text(s_sub, "Totale prodotto");
+    lv_label_set_text(s_sub, app_tr(STR_TOTAL_PROD));
     lv_obj_align(s_sub, LV_ALIGN_TOP_LEFT, 12, 34);
 
     s_title = ui_label(parent, &lv_font_montserrat_24, COL_TEXT);
@@ -317,18 +320,18 @@ void ui_energy_create(lv_obj_t *parent)
     s_ser_batt = lv_chart_add_series(s_chart, COL_PW, LV_CHART_AXIS_SECONDARY_Y);
     s_ser_home = lv_chart_add_series(s_chart, COL_HOME_BLUE, LV_CHART_AXIS_SECONDARY_Y);
 
-    lv_obj_t *flusso = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
-    lv_label_set_text(flusso, "Flusso di energia");
-    lv_obj_align(flusso, LV_ALIGN_TOP_LEFT, 12, 288);
+    s_flow_title = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
+    lv_label_set_text(s_flow_title, app_tr(STR_ENERGY_FLOW));
+    lv_obj_align(s_flow_title, LV_ALIGN_TOP_LEFT, 12, 288);
 
-    lv_obj_t *used = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
-    lv_label_set_text(used, "Utilizzata da");
-    lv_obj_align(used, LV_ALIGN_TOP_LEFT, 12, 312);
+    s_used_title = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(s_used_title, app_tr(STR_USED_BY));
+    lv_obj_align(s_used_title, LV_ALIGN_TOP_LEFT, 12, 312);
 
     dot(parent, 12, 338, COL_HOME_BLUE);
     s_mix_home = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
     lv_obj_set_pos(s_mix_home, 40, 336);
-    lv_label_set_text(s_mix_home, "Casa");
+    lv_label_set_text(s_mix_home, app_tr(STR_HOME));
     s_mix_home_kwh = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
     lv_obj_align(s_mix_home_kwh, LV_ALIGN_TOP_RIGHT, -16, 336);
 
@@ -342,7 +345,7 @@ void ui_energy_create(lv_obj_t *parent)
     dot(parent, 12, 394, COL_GRID);
     s_mix_grid = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
     lv_obj_set_pos(s_mix_grid, 40, 392);
-    lv_label_set_text(s_mix_grid, "Rete");
+    lv_label_set_text(s_mix_grid, app_tr(STR_GRID));
     s_mix_grid_kwh = ui_label(parent, &lv_font_montserrat_16, COL_TEXT);
     lv_obj_align(s_mix_grid_kwh, LV_ALIGN_TOP_RIGHT, -16, 392);
 }
@@ -353,4 +356,19 @@ void ui_energy_update(const energy_state_t *st)
         return;
     }
     apply_state(st);
+}
+
+void ui_energy_apply_lang(void)
+{
+    if (!s_when) {
+        return;
+    }
+    lv_label_set_text(s_when, app_tr(STR_TODAY));
+    lv_label_set_text(s_sub, app_tr(STR_TOTAL_PROD));
+    if (s_flow_title) {
+        lv_label_set_text(s_flow_title, app_tr(STR_ENERGY_FLOW));
+    }
+    if (s_used_title) {
+        lv_label_set_text(s_used_title, app_tr(STR_USED_BY));
+    }
 }
