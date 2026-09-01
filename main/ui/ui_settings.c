@@ -1,14 +1,18 @@
 #include "ui.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app_config.h"
+#include "app_lte.h"
+#include "app_net.h"
 #include "app_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tesla_client.h"
 #include "ui_theme.h"
+#include "weather_client.h"
 
 typedef struct {
     lv_obj_t *ssid;
@@ -16,6 +20,12 @@ typedef struct {
     lv_obj_t *host;
     lv_obj_t *token;
     lv_obj_t *site;
+    lv_obj_t *lat;
+    lv_obj_t *lon;
+    lv_obj_t *apn;
+    lv_obj_t *simpin;
+    lv_obj_t *poll;
+    lv_obj_t *wxpoll;
     lv_obj_t *msg;
     lv_obj_t *ip;
     lv_obj_t *list;
@@ -41,6 +51,40 @@ static lv_obj_t *make_ta(lv_obj_t *parent, lv_coord_t w, lv_coord_t h, bool pwd)
     return ta;
 }
 
+static lv_obj_t *make_ta_gps(lv_obj_t *parent, lv_coord_t w, lv_coord_t h, const char *ph)
+{
+    lv_obj_t *ta = lv_textarea_create(parent);
+    lv_obj_set_size(ta, w, h);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, 12);
+    lv_textarea_set_accepted_chars(ta, "0123456789.,-");
+    lv_textarea_set_placeholder_text(ta, ph);
+    lv_obj_set_style_bg_color(ta, COL_ELEV, 0);
+    lv_obj_set_style_text_color(ta, COL_TEXT, 0);
+    lv_obj_set_style_border_color(ta, COL_LINE, 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, 8, 0);
+    ui_attach_textarea_num(ta);
+    return ta;
+}
+
+static lv_obj_t *make_ta_int(lv_obj_t *parent, lv_coord_t w, lv_coord_t h, const char *ph, uint8_t max_len)
+{
+    lv_obj_t *ta = lv_textarea_create(parent);
+    lv_obj_set_size(ta, w, h);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, max_len);
+    lv_textarea_set_accepted_chars(ta, "0123456789");
+    lv_textarea_set_placeholder_text(ta, ph);
+    lv_obj_set_style_bg_color(ta, COL_ELEV, 0);
+    lv_obj_set_style_text_color(ta, COL_TEXT, 0);
+    lv_obj_set_style_border_color(ta, COL_LINE, 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, 8, 0);
+    ui_attach_textarea_num(ta);
+    return ta;
+}
+
 static lv_obj_t *make_btn(lv_obj_t *parent, const char *txt, lv_event_cb_t cb, void *user)
 {
     lv_obj_t *btn = lv_btn_create(parent);
@@ -63,6 +107,24 @@ static void load_form(settings_form_t *f)
     lv_textarea_set_text(f->host, cfg.api_host);
     lv_textarea_set_text(f->token, cfg.api_token);
     lv_textarea_set_text(f->site, cfg.site_id);
+    lv_textarea_set_text(f->lat, cfg.gps_lat);
+    lv_textarea_set_text(f->lon, cfg.gps_lon);
+    if (f->apn) {
+        lv_textarea_set_text(f->apn, cfg.lte_apn);
+    }
+    if (f->simpin) {
+        lv_textarea_set_text(f->simpin, cfg.lte_pin);
+    }
+    if (f->poll) {
+        char b[8];
+        snprintf(b, sizeof(b), "%u", (unsigned)cfg.poll_s);
+        lv_textarea_set_text(f->poll, b);
+    }
+    if (f->wxpoll) {
+        char b[8];
+        snprintf(b, sizeof(b), "%u", (unsigned)cfg.wx_poll_min);
+        lv_textarea_set_text(f->wxpoll, b);
+    }
 }
 
 static void save_form(settings_form_t *f)
@@ -71,6 +133,20 @@ static void save_form(settings_form_t *f)
     app_config_set_host(lv_textarea_get_text(f->host));
     app_config_set_token(lv_textarea_get_text(f->token));
     app_config_set_site_id(lv_textarea_get_text(f->site));
+    app_config_set_gps(lv_textarea_get_text(f->lat), lv_textarea_get_text(f->lon));
+    app_config_t cfg;
+    app_config_get(&cfg);
+    app_config_set_lte(f->apn ? lv_textarea_get_text(f->apn) : cfg.lte_apn,
+                       f->simpin ? lv_textarea_get_text(f->simpin) : cfg.lte_pin, cfg.lte_user, cfg.lte_pass);
+    uint16_t poll = cfg.poll_s;
+    uint16_t wxm = cfg.wx_poll_min;
+    if (f->poll) {
+        poll = (uint16_t)atoi(lv_textarea_get_text(f->poll));
+    }
+    if (f->wxpoll) {
+        wxm = (uint16_t)atoi(lv_textarea_get_text(f->wxpoll));
+    }
+    app_config_set_polls(poll, wxm);
     app_config_save();
 }
 
@@ -96,17 +172,27 @@ static void connect_task(void *arg)
     settings_form_t *f = (settings_form_t *)arg;
     app_config_t cfg;
     app_config_get(&cfg);
-    esp_err_t err = app_wifi_connect(cfg.wifi_ssid, cfg.wifi_pass);
+    esp_err_t err = ESP_FAIL;
+    if (cfg.wifi_ssid[0]) {
+        err = app_wifi_connect(cfg.wifi_ssid, cfg.wifi_pass);
+    }
+    if (!app_wifi_is_connected() && app_config_has_lte()) {
+        app_lte_request();
+    }
+    if (app_net_is_online() && app_config_has_gps()) {
+        weather_client_kick();
+    }
     ui_lock();
-    if (err == ESP_OK) {
+    ui_refresh();
+    if (app_net_is_online()) {
         char line[96];
-        snprintf(line, sizeof(line), "Connesso  %s   Token: http://%s", app_wifi_ip(), app_wifi_ip());
+        snprintf(line, sizeof(line), "Connesso (%s)  http://%s", app_net_kind_name(), app_net_ip());
         set_msg(f, line, false);
         if (!app_config_needs_wizard()) {
             ui_show_wizard(false);
         }
     } else {
-        set_msg(f, "WiFi: connessione fallita", true);
+        set_msg(f, err == ESP_OK ? "Rete: connessione fallita" : "WiFi/4G: connessione fallita", true);
     }
     ui_unlock();
     vTaskDelete(NULL);
@@ -172,7 +258,7 @@ static void on_save(lv_event_t *e)
     settings_form_t *f = lv_event_get_user_data(e);
     save_form(f);
     set_msg(f, "Salvato in NVS", false);
-    xTaskCreate(connect_task, "wifi_conn", 8192, f, 5, NULL);
+    xTaskCreate(connect_task, "wifi_conn", 16384, f, 5, NULL);
 }
 
 static void test_api_task(void *arg)
@@ -211,7 +297,7 @@ static void build_form(lv_obj_t *parent, settings_form_t *f, bool wizard)
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *sub = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
-    lv_label_set_text(sub, "WiFi casa, oppure AP Powerwall-LCD (password powerwall).");
+    lv_label_set_text(sub, "WiFi 2.4 GHz preferito; 4G (A7670E) se manca la WiFi.");
     lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 0, 32);
 
     f->ip = ui_label(parent, &lv_font_montserrat_16, COL_STATUS);
@@ -235,8 +321,8 @@ static void build_form(lv_obj_t *parent, settings_form_t *f, bool wizard)
     lv_obj_set_pos(scan, 0, 132);
 
     f->list = lv_list_create(parent);
-    lv_obj_set_size(f->list, 740, 72);
-    lv_obj_set_pos(f->list, 0, 176);
+    lv_obj_set_size(f->list, 740, 56);
+    lv_obj_set_pos(f->list, 0, 172);
     lv_obj_set_style_bg_color(f->list, COL_CARD, 0);
     lv_obj_set_style_border_width(f->list, 0, 0);
     lv_obj_set_style_text_color(f->list, COL_TEXT, 0);
@@ -244,48 +330,84 @@ static void build_form(lv_obj_t *parent, settings_form_t *f, bool wizard)
 
     lv_obj_t *l_host = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(l_host, "Host API");
-    lv_obj_set_pos(l_host, 0, 256);
+    lv_obj_set_pos(l_host, 0, 236);
     f->host = make_ta(parent, 740, 40, false);
-    lv_obj_set_pos(f->host, 0, 276);
+    lv_obj_set_pos(f->host, 0, 256);
 
     lv_obj_t *l_tok = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(l_tok, "Token MyTeslaMate");
-    lv_obj_set_pos(l_tok, 0, 322);
+    lv_obj_set_pos(l_tok, 0, 300);
     f->token = make_ta(parent, 740, 40, true);
-    lv_obj_set_pos(f->token, 0, 342);
+    lv_obj_set_pos(f->token, 0, 320);
+
+    lv_obj_t *l_apn = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_apn, "APN 4G (es. internet)");
+    lv_obj_set_pos(l_apn, 0, 364);
+    f->apn = make_ta(parent, 480, 40, false);
+    lv_obj_set_pos(f->apn, 0, 384);
+
+    lv_obj_t *l_pin = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_pin, "PIN SIM");
+    lv_obj_set_pos(l_pin, 500, 364);
+    f->simpin = make_ta(parent, 240, 40, true);
+    lv_obj_set_pos(f->simpin, 500, 384);
 
     lv_obj_t *l_site = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(l_site, "Energy site id");
-    lv_obj_set_pos(l_site, 0, 388);
-    f->site = make_ta(parent, 360, 40, false);
-    lv_obj_set_pos(f->site, 0, 408);
+    lv_obj_set_pos(l_site, 0, 428);
+    f->site = make_ta(parent, 240, 40, false);
+    lv_obj_set_pos(f->site, 0, 448);
+
+    lv_obj_t *l_lat = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_lat, "Latitudine");
+    lv_obj_set_pos(l_lat, 256, 428);
+    f->lat = make_ta_gps(parent, 230, 40, "45.1234");
+    lv_obj_set_pos(f->lat, 256, 448);
+
+    lv_obj_t *l_lon = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_lon, "Longitudine");
+    lv_obj_set_pos(l_lon, 502, 428);
+    f->lon = make_ta_gps(parent, 238, 40, "9.1234");
+    lv_obj_set_pos(f->lon, 502, 448);
+
+    lv_obj_t *l_poll = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_poll, "Poll Tesla (s)");
+    lv_obj_set_pos(l_poll, 0, 492);
+    f->poll = make_ta_int(parent, 240, 40, "20", 3);
+    lv_obj_set_pos(f->poll, 0, 512);
+
+    lv_obj_t *l_wx = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(l_wx, "Meteo (min)");
+    lv_obj_set_pos(l_wx, 256, 492);
+    f->wxpoll = make_ta_int(parent, 230, 40, "15", 3);
+    lv_obj_set_pos(f->wxpoll, 256, 512);
 
     lv_obj_t *save = make_btn(parent, "Salva e connetti", on_save, f);
     lv_obj_set_size(save, 180, 40);
-    lv_obj_set_pos(save, 380, 408);
+    lv_obj_set_pos(save, 0, 564);
     lv_obj_set_style_bg_color(save, COL_PW, 0);
     lv_obj_set_style_text_color(lv_obj_get_child(save, 0), COL_BG, 0);
 
     lv_obj_t *test = make_btn(parent, "Test API", on_test_api, f);
     lv_obj_set_size(test, 140, 40);
-    lv_obj_set_pos(test, 572, 408);
+    lv_obj_set_pos(test, 192, 564);
 
     f->msg = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(f->msg, "");
-    lv_obj_set_pos(f->msg, 0, 454);
+    lv_obj_set_pos(f->msg, 0, 612);
 
     lv_obj_t *l_log = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
-    lv_label_set_text(l_log, "Ultime 5 letture");
-    lv_obj_set_pos(l_log, 0, 478);
+    lv_label_set_text(l_log, "Ultime 15 letture");
+    lv_obj_set_pos(l_log, 0, 636);
     f->reads = ui_label(parent, &lv_font_montserrat_12, COL_TEXT);
     lv_label_set_text(f->reads, "Nessuna lettura ancora.");
     lv_label_set_long_mode(f->reads, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(f->reads, 740);
-    lv_obj_set_pos(f->reads, 0, 500);
+    lv_obj_set_pos(f->reads, 0, 658);
 
     load_form(f);
 
-    lv_obj_set_style_min_height(parent, 640, 0);
+    lv_obj_set_style_min_height(parent, 1100, 0);
 }
 
 void ui_settings_create(lv_obj_t *parent, bool wizard)
@@ -309,18 +431,25 @@ static void set_ip_label(settings_form_t *f)
     if (!f->ip) {
         return;
     }
-    if (app_wifi_is_connected() && app_wifi_ip()[0]) {
+    if (app_net_is_online() && app_net_ip()[0]) {
         char line[80];
-        snprintf(line, sizeof(line), "http://%s", app_wifi_ip());
-        lv_label_set_text(f->ip, line);
+        snprintf(line, sizeof(line), "%s  http://%s", app_net_kind_name(), app_net_ip());
+        if (!f->ip || !lv_label_get_text(f->ip) || strcmp(lv_label_get_text(f->ip), line) != 0) {
+            lv_label_set_text(f->ip, line);
+        }
         lv_obj_set_style_text_color(f->ip, COL_PW, 0);
     } else if (app_wifi_ap_is_up()) {
         char line[80];
         snprintf(line, sizeof(line), "AP http://%s", APP_WIFI_AP_IP);
-        lv_label_set_text(f->ip, line);
+        if (!f->ip || !lv_label_get_text(f->ip) || strcmp(lv_label_get_text(f->ip), line) != 0) {
+            lv_label_set_text(f->ip, line);
+        }
         lv_obj_set_style_text_color(f->ip, COL_STATUS, 0);
     } else {
-        lv_label_set_text(f->ip, "WiFi: offline");
+        const char *off = "Rete: offline";
+        if (!f->ip || !lv_label_get_text(f->ip) || strcmp(lv_label_get_text(f->ip), off) != 0) {
+            lv_label_set_text(f->ip, off);
+        }
         lv_obj_set_style_text_color(f->ip, COL_MUTED, 0);
     }
 }
@@ -330,9 +459,12 @@ static void set_reads_label(settings_form_t *f)
     if (!f->reads) {
         return;
     }
-    static char buf[480];
+    static char buf[2400];
     energy_model_format_reads(buf, sizeof(buf));
-    lv_label_set_text(f->reads, buf);
+    const char *cur = lv_label_get_text(f->reads);
+    if (!cur || strcmp(cur, buf) != 0) {
+        lv_label_set_text(f->reads, buf);
+    }
 }
 
 void ui_settings_on_wifi(void)

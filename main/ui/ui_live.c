@@ -5,12 +5,17 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "app_net.h"
+#include "app_tz.h"
 #include "app_wifi.h"
 #include "ui_icons.h"
 #include "ui_theme.h"
+#include "weather_client.h"
 
 #define FLOW_THRESH_W 80.0f
 #define FLOW_DOTS     2
+#define WX_COL_X      516
+#define WX_COL_W      276
 
 typedef struct {
     lv_point_t a;
@@ -22,14 +27,18 @@ typedef struct {
 } flow_seg_t;
 
 static lv_obj_t *s_site;
+static lv_obj_t *s_clock;
+static lv_obj_t *s_clock_date;
 static lv_obj_t *s_status;
-static lv_obj_t *s_wifi;
+static lv_obj_t *s_wx_box;
+static lv_obj_t *s_wx_icon;
+static lv_obj_t *s_wx_temp;
+static lv_obj_t *s_wx_cond;
 static lv_obj_t *s_err;
 static lv_obj_t *s_solar_v;
 static lv_obj_t *s_home_v;
 static lv_obj_t *s_pw_v;
 static lv_obj_t *s_grid_v;
-static lv_obj_t *s_today;
 static lv_obj_t *s_batt_fill;
 static lv_point_t s_pts_sh[2];
 static lv_point_t s_pts_hp[2];
@@ -39,6 +48,32 @@ static lv_obj_t *s_line_hp;
 static lv_obj_t *s_line_hg;
 static flow_seg_t s_flow[3];
 static bool s_batt_charging;
+
+typedef struct {
+    lv_obj_t *when;
+    lv_obj_t *icon;
+    lv_obj_t *temp;
+    lv_obj_t *desc;
+} fc_slot_ui_t;
+
+typedef struct {
+    lv_obj_t *title;
+    fc_slot_ui_t slot[WEATHER_SLOTS];
+} fc_day_ui_t;
+
+static fc_day_ui_t s_fc[WEATHER_DAYS];
+
+static void label_set(lv_obj_t *obj, const char *txt)
+{
+    if (!obj || !txt) {
+        return;
+    }
+    const char *cur = lv_label_get_text(obj);
+    if (cur && strcmp(cur, txt) == 0) {
+        return;
+    }
+    lv_label_set_text(obj, txt);
+}
 
 static lv_obj_t *make_dot(lv_obj_t *parent, lv_color_t color)
 {
@@ -139,8 +174,8 @@ static void batt_set_charging(bool charging)
     }
 }
 
-static void make_caption(lv_obj_t *parent, lv_coord_t cx, lv_coord_t top_y, const char *title,
-                         lv_obj_t **value_out)
+static lv_obj_t *make_caption(lv_obj_t *parent, lv_coord_t cx, lv_coord_t top_y, const char *title,
+                              lv_obj_t **value_out)
 {
     lv_obj_t *t = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(t, title);
@@ -150,6 +185,13 @@ static void make_caption(lv_obj_t *parent, lv_coord_t cx, lv_coord_t top_y, cons
     lv_label_set_text(v, "--.- kW");
     lv_obj_align(v, LV_ALIGN_TOP_MID, cx - 400, top_y + 94);
     *value_out = v;
+    return t;
+}
+
+static void caption_right_of_line(lv_obj_t *obj, lv_coord_t line_x, lv_coord_t y)
+{
+    lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(obj, LV_ALIGN_TOP_LEFT, line_x + 22, y);
 }
 
 static lv_obj_t *make_line(lv_obj_t *parent, lv_point_t *pts, lv_coord_t x1, lv_coord_t y1,
@@ -167,34 +209,129 @@ static lv_obj_t *make_line(lv_obj_t *parent, lv_point_t *pts, lv_coord_t x1, lv_
     return line;
 }
 
+static lv_obj_t *make_card(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
+{
+    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_set_size(c, w, h);
+    lv_obj_set_pos(c, x, y);
+    lv_obj_set_style_bg_color(c, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_radius(c, 10, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    return c;
+}
+
+static void make_fc_slot(lv_obj_t *card, fc_slot_ui_t *s, lv_coord_t y, const char *when)
+{
+    s->icon = ui_wx_icon_create(card, 24);
+    lv_obj_set_pos(s->icon, 8, y);
+
+    s->when = ui_label(card, &lv_font_montserrat_12, COL_MUTED);
+    lv_label_set_text(s->when, when);
+    lv_obj_set_pos(s->when, 38, y + 4);
+    lv_obj_set_width(s->when, 68);
+
+    s->temp = ui_label(card, &lv_font_montserrat_16, COL_TEXT);
+    lv_label_set_text(s->temp, "--C");
+    lv_obj_set_pos(s->temp, 108, y + 2);
+    lv_obj_set_width(s->temp, 48);
+
+    s->desc = ui_label(card, &lv_font_montserrat_12, COL_MUTED);
+    lv_label_set_text(s->desc, "--");
+    lv_obj_set_pos(s->desc, 158, y + 5);
+    lv_obj_set_width(s->desc, 108);
+    lv_label_set_long_mode(s->desc, LV_LABEL_LONG_DOT);
+}
+
+static void clock_paint(void)
+{
+    if (!s_clock) {
+        return;
+    }
+    char hm[8];
+    char date[24];
+    app_tz_format(hm, sizeof(hm), date, sizeof(date));
+    label_set(s_clock, hm);
+    label_set(s_clock_date, date);
+}
+
+static void clock_timer_cb(lv_timer_t *tm)
+{
+    (void)tm;
+    clock_paint();
+}
+
 void ui_live_create(lv_obj_t *parent)
 {
+    s_wx_box = lv_obj_create(parent);
+    lv_obj_set_size(s_wx_box, WX_COL_W, 52);
+    lv_obj_set_pos(s_wx_box, WX_COL_X, 6);
+    lv_obj_set_style_bg_opa(s_wx_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_wx_box, 0, 0);
+    lv_obj_set_style_pad_all(s_wx_box, 0, 0);
+    lv_obj_clear_flag(s_wx_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_wx_box, LV_OBJ_FLAG_CLICKABLE);
+
+    s_wx_icon = ui_wx_icon_create(s_wx_box, 36);
+    lv_obj_set_pos(s_wx_icon, 0, 8);
+
+    s_wx_temp = ui_label(s_wx_box, &lv_font_montserrat_24, COL_MUTED);
+    lv_label_set_text(s_wx_temp, "--C");
+    lv_obj_set_pos(s_wx_temp, 44, 0);
+
+    s_wx_cond = ui_label(s_wx_box, &lv_font_montserrat_14, COL_MUTED);
+    lv_label_set_text(s_wx_cond, "");
+    lv_obj_set_pos(s_wx_cond, 44, 28);
+
+    static const char *when_lbl[WEATHER_SLOTS] = {"Mattina", "Pomer.", "Sera"};
+    static const char *day_lbl[WEATHER_DAYS] = {"Oggi", "Domani", "Dopodomani"};
+    for (int d = 0; d < WEATHER_DAYS; d++) {
+        lv_obj_t *card = make_card(parent, WX_COL_X, 64 + d * 118, WX_COL_W, 112);
+        s_fc[d].title = ui_label(card, &lv_font_montserrat_14, COL_TEXT);
+        lv_label_set_text(s_fc[d].title, day_lbl[d]);
+        lv_obj_set_pos(s_fc[d].title, 10, 4);
+        for (int k = 0; k < WEATHER_SLOTS; k++) {
+            make_fc_slot(card, &s_fc[d].slot[k], 24 + k * 28, when_lbl[k]);
+        }
+    }
+
     s_site = ui_label(parent, &lv_font_montserrat_24, COL_TEXT);
-    lv_label_set_text(s_site, APP_SITE_NAME_DEFAULT);
-    lv_obj_align(s_site, LV_ALIGN_TOP_LEFT, 20, 12);
+    lv_label_set_text(s_site, "Impianto");
+    lv_obj_align(s_site, LV_ALIGN_TOP_LEFT, 16, 8);
+    lv_obj_set_width(s_site, 268);
+    lv_label_set_long_mode(s_site, LV_LABEL_LONG_DOT);
+
+    s_clock = ui_label(parent, &lv_font_montserrat_28, COL_TEXT);
+    lv_label_set_text(s_clock, "--:--");
+    lv_obj_align(s_clock, LV_ALIGN_TOP_MID, 0, 4);
+
+    s_clock_date = ui_label(parent, &lv_font_montserrat_12, COL_MUTED);
+    lv_label_set_text(s_clock_date, "");
+    lv_obj_align(s_clock_date, LV_ALIGN_TOP_MID, 0, 36);
+    lv_timer_create(clock_timer_cb, 1000, NULL);
+    clock_paint();
 
     s_status = ui_label(parent, &lv_font_montserrat_16, COL_STATUS);
     lv_label_set_text(s_status, "In attesa");
-    lv_obj_align(s_status, LV_ALIGN_TOP_LEFT, 20, 44);
+    lv_obj_align(s_status, LV_ALIGN_TOP_LEFT, 16, 38);
 
-    s_wifi = ui_label(parent, &lv_font_montserrat_20, COL_MUTED);
-    lv_label_set_text(s_wifi, "WiFi: --");
-    lv_obj_align(s_wifi, LV_ALIGN_TOP_RIGHT, -20, 10);
-
-    s_err = ui_label(parent, &lv_font_montserrat_14, COL_DANGER);
+    s_err = ui_label(parent, &lv_font_montserrat_12, COL_DANGER);
     lv_label_set_text(s_err, "");
-    lv_obj_align(s_err, LV_ALIGN_TOP_MID, 0, 68);
+    lv_obj_align(s_err, LV_ALIGN_TOP_LEFT, 16, 58);
     lv_label_set_long_mode(s_err, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_err, 760);
+    lv_obj_set_width(s_err, 200);
 
-    const lv_coord_t sx = 400, sy = 148;
-    const lv_coord_t hx = 400, hy = 268;
-    const lv_coord_t px = 175, py = 338;
-    const lv_coord_t gx = 625, gy = 338;
+    const lv_coord_t sx = 252, sy = 118;
+    const lv_coord_t hx = 252, hy = 250;
+    const lv_coord_t px = 400, py = 340;
+    const lv_coord_t gx = 104, gy = 340;
 
     s_line_sh = make_line(parent, s_pts_sh, sx, sy + 36, hx, hy - 36);
-    s_line_hp = make_line(parent, s_pts_hp, hx - 36, hy + 8, px + 36, py - 12);
-    s_line_hg = make_line(parent, s_pts_hg, hx + 36, hy + 8, gx - 36, py - 12);
+    s_line_hp = make_line(parent, s_pts_hp, hx + 36, hy + 8, px - 36, py - 12);
+    s_line_hg = make_line(parent, s_pts_hg, hx - 36, hy + 8, gx + 36, py - 12);
 
     s_flow[0].a = s_pts_sh[0];
     s_flow[0].b = s_pts_sh[1];
@@ -217,20 +354,87 @@ void ui_live_create(lv_obj_t *parent)
     ui_icon_battery(parent, px, py, &s_batt_fill);
     ui_icon_pylon(parent, gx, gy);
 
-    make_caption(parent, sx, sy - 54, "Solare", &s_solar_v);
-    make_caption(parent, hx, hy - 54, "Casa", &s_home_v);
-    make_caption(parent, px, py - 54, "Powerwall", &s_pw_v);
-    make_caption(parent, gx, gy - 54, "Rete", &s_grid_v);
+    (void)make_caption(parent, sx, sy - 50, "Solare", &s_solar_v);
+    lv_obj_t *home_title = make_caption(parent, hx, hy - 50, "Casa", &s_home_v);
+    (void)make_caption(parent, px, py - 50, "Powerwall", &s_pw_v);
+    (void)make_caption(parent, gx, gy - 50, "Rete", &s_grid_v);
+    caption_right_of_line(s_solar_v, sx, sy - 50 + 94);
+    caption_right_of_line(home_title, hx, hy - 50);
+    lv_obj_set_width(s_pw_v, 156);
+    lv_label_set_long_mode(s_pw_v, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_pw_v, LV_TEXT_ALIGN_CENTER, 0);
 
     for (int s = 0; s < 3; s++) {
         for (int i = 0; i < FLOW_DOTS; i++) {
             lv_obj_move_foreground(s_flow[s].dot[i]);
         }
     }
+}
 
-    s_today = ui_label(parent, &lv_font_montserrat_16, COL_MUTED);
-    lv_label_set_text(s_today, "Oggi: -- kWh");
-    lv_obj_align(s_today, LV_ALIGN_BOTTOM_MID, 0, -8);
+static lv_color_t wx_color(int code)
+{
+    if (code == 0 || code == 1) {
+        return COL_SOLAR;
+    }
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+        return COL_HOME_BLUE;
+    }
+    if (code >= 95) {
+        return COL_STATUS;
+    }
+    return COL_TEXT;
+}
+
+static void wx_set(const char *temp, lv_color_t temp_c, const char *cond, lv_color_t cond_c, int wmo,
+                   bool show_icon)
+{
+    static bool icon_layout;
+    label_set(s_wx_temp, temp);
+    lv_obj_set_style_text_color(s_wx_temp, temp_c, 0);
+    label_set(s_wx_cond, cond);
+    lv_obj_set_style_text_color(s_wx_cond, cond_c, 0);
+    if (show_icon) {
+        ui_wx_icon_set(s_wx_icon, wmo);
+        lv_obj_clear_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+        if (!icon_layout) {
+            lv_obj_set_pos(s_wx_temp, 44, 0);
+            lv_obj_set_pos(s_wx_cond, 44, 28);
+            icon_layout = true;
+        }
+    } else {
+        lv_obj_add_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+        if (icon_layout) {
+            lv_obj_set_pos(s_wx_temp, 8, 0);
+            lv_obj_set_pos(s_wx_cond, 8, 28);
+            icon_layout = false;
+        }
+    }
+}
+
+static void forecast_set(const weather_t *wx)
+{
+    static const char *fallback[WEATHER_DAYS] = {"Oggi", "Domani", "Dopodomani"};
+    for (int d = 0; d < WEATHER_DAYS; d++) {
+        const char *title = wx && wx->day[d].title[0] ? wx->day[d].title : fallback[d];
+        label_set(s_fc[d].title, title);
+        for (int k = 0; k < WEATHER_SLOTS; k++) {
+            const weather_slot_t *sl = wx ? &wx->day[d].slot[k] : NULL;
+            if (sl && sl->valid) {
+                char t[12];
+                snprintf(t, sizeof(t), "%.0fC", sl->temp_c);
+                label_set(s_fc[d].slot[k].temp, t);
+                lv_obj_set_style_text_color(s_fc[d].slot[k].temp, wx_color(sl->wmo_code), 0);
+                label_set(s_fc[d].slot[k].desc, sl->condition);
+                ui_wx_icon_set(s_fc[d].slot[k].icon, sl->wmo_code);
+                lv_obj_clear_flag(s_fc[d].slot[k].icon, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                label_set(s_fc[d].slot[k].temp, "--C");
+                lv_obj_set_style_text_color(s_fc[d].slot[k].temp, COL_MUTED, 0);
+                label_set(s_fc[d].slot[k].desc, "--");
+                lv_obj_add_flag(s_fc[d].slot[k].icon, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
 }
 
 void ui_live_update(const energy_state_t *st)
@@ -240,52 +444,63 @@ void ui_live_update(const energy_state_t *st)
     }
 
     const energy_live_t *l = &st->live;
-    lv_label_set_text(s_site, l->site_name[0] ? l->site_name : APP_SITE_NAME_DEFAULT);
-    lv_label_set_text(s_status, l->status[0] ? l->status : "In attesa");
+    label_set(s_site, l->site_name[0] ? l->site_name : "Impianto");
+    label_set(s_status, l->status[0] ? l->status : "In attesa");
     lv_obj_set_style_text_color(s_status, COL_STATUS, 0);
+    clock_paint();
 
-    if (app_wifi_is_connected() && app_wifi_ip()[0]) {
-        lv_label_set_text(s_wifi, app_wifi_ip());
-        lv_obj_set_style_text_color(s_wifi, COL_PW, 0);
-    } else if (app_wifi_ap_is_up()) {
-        lv_label_set_text(s_wifi, APP_WIFI_AP_SSID);
-        lv_obj_set_style_text_color(s_wifi, COL_STATUS, 0);
+    weather_t wx;
+    weather_client_get(&wx);
+    if (app_wifi_ap_is_up() && !app_net_is_online()) {
+        wx_set(APP_WIFI_AP_SSID, COL_STATUS, "setup WiFi", COL_MUTED, 0, false);
+        forecast_set(NULL);
+    } else if (wx.valid) {
+        char t[16];
+        snprintf(t, sizeof(t), "%.0fC", wx.temp_c);
+        wx_set(t, wx_color(wx.wmo_code), wx.condition, COL_MUTED, wx.wmo_code, true);
+        forecast_set(&wx);
+    } else if (!app_config_has_gps()) {
+        wx_set("Meteo", COL_MUTED, "imposta GPS", COL_MUTED, 0, false);
+        forecast_set(NULL);
+    } else if (!app_net_is_online()) {
+        wx_set("Meteo", COL_DANGER, "rete offline", COL_DANGER, 0, false);
+        forecast_set(NULL);
     } else {
-        lv_label_set_text(s_wifi, "WiFi: offline");
-        lv_obj_set_style_text_color(s_wifi, COL_DANGER, 0);
+        wx_set("Meteo", COL_MUTED, "...", COL_MUTED, 0, false);
+        forecast_set(&wx);
     }
 
     if (st->fetching) {
-        lv_label_set_text(s_status, "Lettura in corso...");
+        label_set(s_status, "Lettura in corso...");
         lv_obj_set_style_text_color(s_status, COL_STATUS, 0);
-    } else if (app_wifi_is_connected() && !l->status[0]) {
-        lv_label_set_text(s_status, "In rete");
+    } else if (app_net_is_online() && !l->status[0]) {
+        label_set(s_status, app_net_kind() == APP_NET_LTE ? "In rete (4G)" : "In rete");
     }
 
     if (st->last_error[0]) {
-        lv_label_set_text(s_err, st->last_error);
+        label_set(s_err, st->last_error);
         lv_obj_set_style_text_color(s_err, COL_DANGER, 0);
-    } else if (app_wifi_is_connected() && app_wifi_ip()[0] && !app_config_has_token()) {
+    } else if (app_net_is_online() && app_net_ip()[0] && !app_config_has_token()) {
         char hint[96];
-        snprintf(hint, sizeof(hint), "Token: apri http://%s dal browser", app_wifi_ip());
-        lv_label_set_text(s_err, hint);
+        snprintf(hint, sizeof(hint), "Token: apri http://%s dal browser", app_net_ip());
+        label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_STATUS, 0);
-    } else if (app_wifi_is_connected() && app_wifi_ip()[0]) {
+    } else if (app_net_is_online() && app_net_ip()[0]) {
         char hint[80];
-        snprintf(hint, sizeof(hint), "Config: http://%s", app_wifi_ip());
-        lv_label_set_text(s_err, hint);
+        snprintf(hint, sizeof(hint), "Config: http://%s", app_net_ip());
+        label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_MUTED, 0);
     } else if (app_wifi_ap_is_up()) {
         char hint[128];
         snprintf(hint, sizeof(hint), "Collegati a %s  (password %s)  poi apri http://%s", APP_WIFI_AP_SSID,
                  APP_WIFI_AP_PASS, APP_WIFI_AP_IP);
-        lv_label_set_text(s_err, hint);
+        label_set(s_err, hint);
         lv_obj_set_style_text_color(s_err, COL_STATUS, 0);
     } else if (app_wifi_last_error()[0]) {
-        lv_label_set_text(s_err, app_wifi_last_error());
+        label_set(s_err, app_wifi_last_error());
         lv_obj_set_style_text_color(s_err, COL_DANGER, 0);
     } else {
-        lv_label_set_text(s_err, "");
+        label_set(s_err, "");
     }
 
     char buf[48];
@@ -293,13 +508,13 @@ void ui_live_update(const energy_state_t *st)
     if (!l->valid) {
         strlcpy(buf, "--.- kW", sizeof(buf));
     }
-    lv_label_set_text(s_solar_v, buf);
+    label_set(s_solar_v, buf);
 
     energy_fmt_kw(buf, sizeof(buf), l->valid ? l->home_w : 0);
     if (!l->valid) {
         strlcpy(buf, "--.- kW", sizeof(buf));
     }
-    lv_label_set_text(s_home_v, buf);
+    label_set(s_home_v, buf);
 
     if (l->valid) {
         char kw[24];
@@ -325,13 +540,13 @@ void ui_live_update(const energy_state_t *st)
         ui_icon_battery_set_soc(s_batt_fill, 0);
         batt_set_charging(false);
     }
-    lv_label_set_text(s_pw_v, buf);
+    label_set(s_pw_v, buf);
 
     energy_fmt_kw(buf, sizeof(buf), l->valid ? l->grid_w : 0);
     if (!l->valid) {
         strlcpy(buf, "--.- kW", sizeof(buf));
     }
-    lv_label_set_text(s_grid_v, buf);
+    label_set(s_grid_v, buf);
 
     bool ok = l->valid;
     int solar_dir = (ok && l->solar_w > FLOW_THRESH_W) ? 1 : 0;
@@ -358,10 +573,4 @@ void ui_live_update(const energy_state_t *st)
     flow_set(&s_flow[0], solar_dir, COL_SOLAR, ok ? l->solar_w : 0);
     flow_set(&s_flow[1], batt_dir, COL_PW, ok ? l->battery_w : 0);
     flow_set(&s_flow[2], grid_dir, grid_dir < 0 ? COL_HOME_BLUE : COL_GRID, ok ? l->grid_w : 0);
-
-    if (st->today.valid) {
-        char line[64];
-        snprintf(line, sizeof(line), "Solare oggi  %.1f kWh", st->today.solar_gen_kwh);
-        lv_label_set_text(s_today, line);
-    }
 }

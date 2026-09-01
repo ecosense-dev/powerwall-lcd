@@ -3,14 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "app_config.h"
 #include "app_dns.h"
+#include "app_net.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -29,8 +28,6 @@ static bool s_ap_up;
 static bool s_connecting;
 static char s_ip[16];
 static char s_last_err[64];
-static bool s_sntp_started;
-static app_wifi_ip_cb_t s_ip_cb;
 static uint8_t s_disconnect_reason;
 
 static void set_err(const char *msg)
@@ -55,21 +52,6 @@ static const char *reason_str(uint8_t r)
     }
 }
 
-static void start_sntp(void)
-{
-    if (s_sntp_started) {
-        return;
-    }
-    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-    tzset();
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    config.sync_cb = NULL;
-    if (esp_netif_sntp_init(&config) == ESP_OK) {
-        s_sntp_started = true;
-        ESP_LOGI(TAG, "SNTP started (Europe/Rome)");
-    }
-}
-
 static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
@@ -87,11 +69,9 @@ static void on_got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(8, 8, 8, 8);
     esp_netif_set_dns_info(event->esp_netif, ESP_NETIF_DNS_FALLBACK, &dns);
 
-    start_sntp();
+    esp_netif_set_default_netif(event->esp_netif);
     xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
-    if (s_ip_cb) {
-        s_ip_cb(s_ip);
-    }
+    app_net_notify_got_ip(s_ip);
 }
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -358,5 +338,5 @@ const char *app_wifi_last_error(void)
 
 void app_wifi_set_ip_callback(app_wifi_ip_cb_t cb)
 {
-    s_ip_cb = cb;
+    app_net_set_ip_callback(cb);
 }

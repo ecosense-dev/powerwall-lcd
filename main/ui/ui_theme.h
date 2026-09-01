@@ -16,6 +16,8 @@
 #define COL_STATUS    lv_color_hex(0x5B9DFF)
 #define COL_DANGER    lv_color_hex(0xFF5A5A)
 #define COL_LINE      lv_color_hex(0x2A2A2A)
+#define COL_CLOUD     lv_color_hex(0xC5CAD3)
+#define COL_FOG       lv_color_hex(0x8A8A8A)
 
 static inline void ui_style_screen(lv_obj_t *obj)
 {

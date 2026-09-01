@@ -1,5 +1,7 @@
 #include "ui_icons.h"
 
+#include <stdint.h>
+
 #include "ui_theme.h"
 
 static lv_obj_t *host(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
@@ -142,4 +144,145 @@ void ui_icon_battery_set_soc(lv_obj_t *fill, float soc_pct)
         c = COL_SOLAR;
     }
     lv_obj_set_style_bg_color(fill, c, 0);
+}
+
+static lv_coord_t sc(lv_coord_t size, int v)
+{
+    return (lv_coord_t)((size * v + 16) / 32);
+}
+
+typedef enum {
+    UI_WX_NONE = 0,
+    UI_WX_SUN,
+    UI_WX_PARTLY,
+    UI_WX_CLOUD,
+    UI_WX_FOG,
+    UI_WX_RAIN,
+    UI_WX_SNOW,
+    UI_WX_STORM,
+} ui_wx_kind_t;
+
+static ui_wx_kind_t kind_from_wmo(int code)
+{
+    if (code == 0 || code == 1) {
+        return UI_WX_SUN;
+    }
+    if (code == 2) {
+        return UI_WX_PARTLY;
+    }
+    if (code == 3) {
+        return UI_WX_CLOUD;
+    }
+    if (code == 45 || code == 48) {
+        return UI_WX_FOG;
+    }
+    if (code >= 71 && code <= 77) {
+        return UI_WX_SNOW;
+    }
+    if (code == 85 || code == 86) {
+        return UI_WX_SNOW;
+    }
+    if (code >= 95) {
+        return UI_WX_STORM;
+    }
+    if (code >= 51) {
+        return UI_WX_RAIN;
+    }
+    return UI_WX_CLOUD;
+}
+
+static void draw_sun(lv_obj_t *box, lv_coord_t size, lv_coord_t ox, lv_coord_t oy, lv_coord_t sun_s)
+{
+    lv_coord_t ray = sc(sun_s, 4);
+    if (ray < 2) {
+        ray = 2;
+    }
+    static const int rx[8] = {14, 24, 28, 24, 14, 4, 0, 4};
+    static const int ry[8] = {0, 4, 14, 24, 28, 24, 14, 4};
+    for (int i = 0; i < 8; i++) {
+        block(box, ox + sc(sun_s, rx[i]), oy + sc(sun_s, ry[i]), ray, ray, COL_SOLAR, ray / 2);
+    }
+    lv_coord_t d = sc(sun_s, 16);
+    block(box, ox + sc(sun_s, 8), oy + sc(sun_s, 8), d, d, COL_SOLAR, LV_RADIUS_CIRCLE);
+    (void)size;
+}
+
+static void draw_cloud(lv_obj_t *box, lv_coord_t size, lv_coord_t ox, lv_coord_t oy, lv_color_t color)
+{
+    lv_coord_t a = sc(size, 12);
+    lv_coord_t b = sc(size, 14);
+    lv_coord_t c = sc(size, 10);
+    block(box, ox + sc(size, 4), oy + sc(size, 12), a, a, color, LV_RADIUS_CIRCLE);
+    block(box, ox + sc(size, 10), oy + sc(size, 8), b, b, color, LV_RADIUS_CIRCLE);
+    block(box, ox + sc(size, 18), oy + sc(size, 12), a, a, color, LV_RADIUS_CIRCLE);
+    block(box, ox + sc(size, 6), oy + sc(size, 16), sc(size, 20), c, color, 4);
+}
+
+static void draw_kind(lv_obj_t *box, ui_wx_kind_t kind, lv_coord_t size)
+{
+    switch (kind) {
+    case UI_WX_SUN:
+        draw_sun(box, size, 0, 0, size);
+        break;
+    case UI_WX_PARTLY:
+        draw_sun(box, size, sc(size, 10), 0, sc(size, 20));
+        draw_cloud(box, size, 0, sc(size, 8), COL_CLOUD);
+        break;
+    case UI_WX_CLOUD:
+        draw_cloud(box, size, 0, sc(size, 4), COL_CLOUD);
+        break;
+    case UI_WX_FOG:
+        block(box, sc(size, 4), sc(size, 8), sc(size, 24), sc(size, 4), COL_FOG, 2);
+        block(box, sc(size, 6), sc(size, 15), sc(size, 20), sc(size, 4), COL_FOG, 2);
+        block(box, sc(size, 4), sc(size, 22), sc(size, 24), sc(size, 4), COL_FOG, 2);
+        break;
+    case UI_WX_RAIN:
+        draw_cloud(box, size, 0, 0, COL_CLOUD);
+        block(box, sc(size, 8), sc(size, 22), sc(size, 3), sc(size, 7), COL_HOME_BLUE, 2);
+        block(box, sc(size, 15), sc(size, 24), sc(size, 3), sc(size, 7), COL_HOME_BLUE, 2);
+        block(box, sc(size, 22), sc(size, 22), sc(size, 3), sc(size, 7), COL_HOME_BLUE, 2);
+        break;
+    case UI_WX_SNOW:
+        draw_cloud(box, size, 0, 0, COL_CLOUD);
+        block(box, sc(size, 8), sc(size, 24), sc(size, 4), sc(size, 4), COL_TEXT, LV_RADIUS_CIRCLE);
+        block(box, sc(size, 15), sc(size, 26), sc(size, 4), sc(size, 4), COL_TEXT, LV_RADIUS_CIRCLE);
+        block(box, sc(size, 22), sc(size, 24), sc(size, 4), sc(size, 4), COL_TEXT, LV_RADIUS_CIRCLE);
+        break;
+    case UI_WX_STORM:
+        draw_cloud(box, size, 0, 0, COL_CLOUD);
+        block(box, sc(size, 14), sc(size, 16), sc(size, 6), sc(size, 8), COL_SOLAR, 1);
+        block(box, sc(size, 12), sc(size, 22), sc(size, 8), sc(size, 8), COL_SOLAR, 1);
+        break;
+    default:
+        break;
+    }
+}
+
+lv_obj_t *ui_wx_icon_create(lv_obj_t *parent, lv_coord_t size)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, size, size);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_set_style_radius(box, 0, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(box, (void *)(uintptr_t)UI_WX_NONE);
+    return box;
+}
+
+void ui_wx_icon_set(lv_obj_t *icon, int wmo_code)
+{
+    if (!icon) {
+        return;
+    }
+    ui_wx_kind_t kind = kind_from_wmo(wmo_code);
+    ui_wx_kind_t prev = (ui_wx_kind_t)(uintptr_t)lv_obj_get_user_data(icon);
+    if (kind == prev && lv_obj_get_child_cnt(icon) > 0) {
+        return;
+    }
+    lv_obj_clean(icon);
+    lv_obj_set_user_data(icon, (void *)(uintptr_t)kind);
+    draw_kind(icon, kind, lv_obj_get_width(icon));
 }

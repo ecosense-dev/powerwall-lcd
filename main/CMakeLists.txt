@@ -8,6 +8,11 @@ idf_component_register(
         "app_console.c"
         "app_httpd.c"
         "app_dns.c"
+        "weather_client.c"
+        "app_tz.c"
+        "app_net.c"
+        "app_lte.c"
+        "app_ota.c"
         "ui/ui.c"
         "ui/ui_live.c"
         "ui/ui_icons.c"
@@ -34,6 +39,8 @@ idf_component_register(
         vfs
         lwip
         esp-tls
+        app_update
+        esp_app_format
 )
 
 idf_build_get_property(build_components BUILD_COMPONENTS)

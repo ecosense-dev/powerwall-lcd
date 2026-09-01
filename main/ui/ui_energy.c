@@ -22,6 +22,18 @@ static lv_obj_t *s_mix_grid_kwh;
 static char s_xlbl[8][8];
 static uint8_t s_xmaj = 2;
 
+static void label_set(lv_obj_t *obj, const char *txt)
+{
+    if (!obj || !txt) {
+        return;
+    }
+    const char *cur = lv_label_get_text(obj);
+    if (cur && strcmp(cur, txt) == 0) {
+        return;
+    }
+    lv_label_set_text(obj, txt);
+}
+
 static void fill_area(lv_obj_draw_part_dsc_t *dsc, lv_coord_t ybot, lv_color_t color, lv_opa_t opa)
 {
     if (!dsc->p1 || !dsc->p2 || !dsc->draw_ctx) {
@@ -125,8 +137,28 @@ static lv_coord_t to_chart(float watts)
     return (lv_coord_t)(watts / 100.0f);
 }
 
+static uint32_t s_day_sig;
+
+static uint32_t day_sig(const energy_day_t *d)
+{
+    uint32_t s = (uint32_t)d->count * 2654435761u;
+    int n = d->count > 0 && d->count < ENERGY_DAY_MAX_POINTS ? d->count : ENERGY_DAY_MAX_POINTS;
+    if (n > 0) {
+        s ^= (uint32_t)(d->solar_w[0] * 10.0f);
+        s ^= (uint32_t)(d->solar_w[n - 1] * 17.0f);
+        s ^= (uint32_t)(d->home_w[n / 2] * 23.0f);
+        s ^= (uint32_t)(d->battery_w[n - 1] * 29.0f);
+    }
+    return s;
+}
+
 static void fill_chart_day(const energy_day_t *d)
 {
+    uint32_t sig = day_sig(d);
+    if (sig == s_day_sig && s_chart) {
+        return;
+    }
+    s_day_sig = sig;
     int n = ENERGY_DAY_MAX_POINTS;
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(s_chart, n);
@@ -192,34 +224,34 @@ static void update_flow(const energy_period_t *p)
 
     char b[48];
     snprintf(b, sizeof(b), "%d%%  Casa", ph);
-    lv_label_set_text(s_mix_home, b);
+    label_set(s_mix_home, b);
     snprintf(b, sizeof(b), "%.1f kWh", to_home);
-    lv_label_set_text(s_mix_home_kwh, b);
+    label_set(s_mix_home_kwh, b);
 
     snprintf(b, sizeof(b), "%d%%  Powerwall", pb);
-    lv_label_set_text(s_mix_pw, b);
+    label_set(s_mix_pw, b);
     snprintf(b, sizeof(b), "%.1f kWh", to_batt);
-    lv_label_set_text(s_mix_pw_kwh, b);
+    label_set(s_mix_pw_kwh, b);
 
     snprintf(b, sizeof(b), "%d%%  Rete", pg);
-    lv_label_set_text(s_mix_grid, b);
+    label_set(s_mix_grid, b);
     snprintf(b, sizeof(b), "%.1f kWh", to_grid);
-    lv_label_set_text(s_mix_grid_kwh, b);
+    label_set(s_mix_grid_kwh, b);
 }
 
 static void apply_state(const energy_state_t *st)
 {
-    lv_label_set_text(s_when, "Oggi");
+    label_set(s_when, "Oggi");
     if (st->day.valid) {
         fill_chart_day(&st->day);
     }
     if (st->today.valid) {
         char kwh[32];
         snprintf(kwh, sizeof(kwh), "%.1f kWh", st->today.solar_gen_kwh);
-        lv_label_set_text(s_title, kwh);
+        label_set(s_title, kwh);
         update_flow(&st->today);
     } else {
-        lv_label_set_text(s_title, "-- kWh");
+        label_set(s_title, "-- kWh");
         energy_period_t empty;
         memset(&empty, 0, sizeof(empty));
         update_flow(&empty);

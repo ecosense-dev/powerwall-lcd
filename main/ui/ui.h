@@ -24,3 +24,4 @@ void ui_settings_reload(void);
 void ui_settings_on_wifi(void);
 
 void ui_attach_textarea(lv_obj_t *ta);
+void ui_attach_textarea_num(lv_obj_t *ta);

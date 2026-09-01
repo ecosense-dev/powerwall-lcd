@@ -61,6 +61,14 @@ void energy_model_get(energy_state_t *out)
     xSemaphoreGive(s_mu);
 }
 
+bool energy_model_live_valid(void)
+{
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    bool ok = s_state.live.valid;
+    xSemaphoreGive(s_mu);
+    return ok;
+}
+
 void energy_model_set_live(const energy_live_t *live)
 {
     xSemaphoreTake(s_mu, portMAX_DELAY);

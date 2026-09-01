@@ -6,7 +6,7 @@
 
 #define ENERGY_DAY_MAX_POINTS   96
 #define ENERGY_PERIOD_MAX_POINTS 31
-#define ENERGY_READ_LOG         5
+#define ENERGY_READ_LOG         15
 
 typedef struct {
     float solar_w;
@@ -89,5 +89,6 @@ void energy_model_set_status(const char *status);
 void energy_model_log_event(const char *note);
 void energy_model_format_reads(char *buf, size_t n);
 void energy_model_derive_status(energy_live_t *live);
+bool energy_model_live_valid(void);
 void energy_fmt_kw(char *buf, size_t n, float watts);
 void energy_fmt_kwh(char *buf, size_t n, float kwh);

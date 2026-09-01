@@ -3,6 +3,9 @@
 #include "app_config.h"
 #include "app_console.h"
 #include "app_httpd.h"
+#include "app_lte.h"
+#include "app_net.h"
+#include "app_tz.h"
 #include "app_wifi.h"
 #include "energy_model.h"
 #include "esp_heap_caps.h"
@@ -15,6 +18,7 @@
 #include "tesla_client.h"
 #include "ui.h"
 #include "waveshare_rgb_lcd_port.h"
+#include "weather_client.h"
 
 static const char *TAG = "app";
 static TaskHandle_t s_energy;
@@ -35,7 +39,7 @@ static void ip_ready_task(void *arg)
     ui_refresh_locked();
     ui_lock();
     char msg[96];
-    snprintf(msg, sizeof(msg), "IP %s  —  http://%s", app_wifi_ip(), app_wifi_ip());
+    snprintf(msg, sizeof(msg), "IP %s  —  http://%s", app_net_ip(), app_net_ip());
     ui_settings_show_message(msg, false);
     ui_show_wizard(false);
     ui_unlock();
@@ -58,7 +62,7 @@ static void on_got_ip(const char *ip)
     }
 }
 
-static void wifi_supervisor(void *arg)
+static void net_supervisor(void *arg)
 {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(1500));
@@ -70,7 +74,30 @@ static void wifi_supervisor(void *arg)
                 esp_err_t err = app_wifi_connect_saved();
                 ESP_LOGI(TAG, "wifi: %s %s", esp_err_to_name(err), app_wifi_last_error());
             }
-            if (!app_wifi_is_connected()) {
+        }
+
+        if (app_wifi_is_connected()) {
+            if (app_lte_is_connected()) {
+                ESP_LOGI(TAG, "WiFi ok, stacco il 4G");
+                app_lte_disconnect();
+            }
+            ui_refresh_locked();
+            ui_lock();
+            ui_show_wizard(false);
+            ui_unlock();
+            vTaskDelay(pdMS_TO_TICKS(25000));
+            if (app_wifi_is_connected() && app_wifi_ap_is_up()) {
+                ESP_LOGI(TAG, "STA ok, spengo AP di configurazione");
+                app_httpd_stop();
+                app_wifi_stop_ap();
+                vTaskDelay(pdMS_TO_TICKS(400));
+                app_httpd_start();
+            }
+        } else {
+            if (app_config_has_lte() && !app_lte_is_connected()) {
+                app_lte_request();
+            }
+            if (!app_wifi_ap_is_up()) {
                 app_wifi_start_ap();
                 app_httpd_start();
                 ui_refresh_locked();
@@ -81,22 +108,8 @@ static void wifi_supervisor(void *arg)
                 ui_settings_show_message(msg, false);
                 ui_unlock();
             }
-        } else {
-            ui_refresh_locked();
-            ui_lock();
-            ui_show_wizard(false);
-            ui_unlock();
-            vTaskDelay(pdMS_TO_TICKS(25000));
-            if (app_wifi_is_connected() && app_wifi_ap_is_up()) {
-                ESP_LOGI(TAG, "STA ok, spengo AP di configurazione");
-                /* Stop httpd while APSTA is still up so the ctrl socket can shut it down. */
-                app_httpd_stop();
-                app_wifi_stop_ap();
-                vTaskDelay(pdMS_TO_TICKS(400));
-                app_httpd_start();
-            }
         }
-        vTaskDelay(pdMS_TO_TICKS(app_wifi_is_connected() ? 30000 : 20000));
+        vTaskDelay(pdMS_TO_TICKS(app_net_is_online() ? 30000 : 20000));
     }
 }
 
@@ -106,17 +119,13 @@ static void energy_task(void *arg)
     int hist_div = 0;
     ESP_LOGI(TAG, "energy task avviato");
     while (1) {
-        bool wifi = app_wifi_is_connected();
+        bool net = app_net_is_online();
         bool token = app_config_has_token();
-        ESP_LOGI(TAG, "poll tick wifi=%d token=%d", (int)wifi, (int)token);
+        ESP_LOGI(TAG, "poll tick net=%s token=%d", app_net_kind_name(), (int)token);
 
-        if (wifi && token) {
+        if (net && token) {
             energy_model_log_event("chiamo live_status...");
-            energy_model_set_status("Lettura in corso...");
-            energy_model_set_fetching(true);
-            ui_refresh_locked();
             tesla_client_fetch_live();
-            energy_model_set_fetching(false);
             ui_refresh_locked();
             if (hist_div == 0) {
                 ESP_LOGI(TAG, "poll history");
@@ -125,24 +134,24 @@ static void energy_task(void *arg)
             }
             hist_div = (hist_div + 1) % 15;
         } else {
-            if (!wifi) {
-                energy_model_log_event("in attesa del WiFi");
+            if (!net) {
+                energy_model_log_event("in attesa della rete");
             } else {
                 energy_model_log_event("token mancante");
             }
-            ui_refresh_locked();
         }
 
-        uint32_t ms = 4000;
-        if (wifi && token) {
-            app_config_t cfg;
-            app_config_get(&cfg);
-            energy_state_t live_st;
-            energy_model_get(&live_st);
-            if (live_st.live.valid && cfg.poll_s >= 5) {
-                ms = cfg.poll_s * 1000;
-            } else if (live_st.live.valid) {
-                ms = 20000;
+        if (net && app_config_has_gps()) {
+            weather_client_request();
+        }
+
+        app_config_t cfg;
+        app_config_get(&cfg);
+        uint32_t ms = 15000;
+        if (net && token) {
+            ms = (uint32_t)cfg.poll_s * 1000;
+            if (ms < APP_POLL_S_MIN * 1000) {
+                ms = APP_POLL_S_DEFAULT * 1000;
             }
         }
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms));
@@ -153,8 +162,11 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Powerwall dashboard POC");
     ESP_ERROR_CHECK(app_config_init());
+    app_tz_init();
     energy_model_init();
+    weather_client_init();
     ESP_ERROR_CHECK(app_wifi_init());
+    ESP_ERROR_CHECK(app_lte_init());
 
     const esp_lv_adapter_rotation_t rotation = ESP_LV_ADAPTER_ROTATE_0;
     const esp_lv_adapter_tear_avoid_mode_t tear_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DEFAULT_RGB;
@@ -197,7 +209,7 @@ void app_main(void)
     /* Console before httpd: REPL task needs internal RAM; httpd must not abort boot. */
     app_console_start();
     app_httpd_start();
-    xTaskCreate(wifi_supervisor, "wifi_sup", 10240, NULL, 5, NULL);
+    xTaskCreate(net_supervisor, "net_sup", 12288, NULL, 5, NULL);
     BaseType_t ok = xTaskCreateWithCaps(energy_task, "energy", 32768, NULL, 4, &s_energy,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ok != pdPASS) {

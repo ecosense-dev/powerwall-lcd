@@ -1,30 +1,59 @@
 #include "tesla_client.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "app_config.h"
+#include "app_net.h"
+#include "app_wifi.h"
 #include "energy_model.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "cJSON.h"
-#include "lwip/netdb.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "mbedtls/error.h"
 
 static const char *TAG = "tesla";
-#define HTTP_BODY_MAX (192 * 1024)
+#define HTTP_BODY_MAX   (256 * 1024)
+#define HTTP_TIMEOUT_MS 12000
+#define HTTP_FD_MAX     16
+#define HTTP_FD_SCAN    64
 
 typedef struct {
     char *buf;
     size_t cap;
     size_t len;
+    int64_t t0;
+    bool saw_data;
 } http_acc_t;
+
+typedef struct {
+    esp_err_t err;
+    int status;
+    int sock_errno;
+    int tls_code;
+    int tls_flags;
+    esp_err_t tls_esp;
+    int elapsed_ms;
+    int attempt;
+} http_diag_t;
+
+static http_diag_t s_http_diag;
+static esp_timer_handle_t s_http_wd;
+static volatile bool s_http_killed;
+static int s_fds_before[HTTP_FD_MAX];
+static int s_n_before;
 
 static void json_id_to_str(const cJSON *item, char *buf, size_t n)
 {
@@ -76,64 +105,273 @@ static void trim_slash(char *host)
     }
 }
 
+static const char *http_ev_name(esp_http_client_event_id_t id)
+{
+    switch (id) {
+    case HTTP_EVENT_ERROR:
+        return "ERROR";
+    case HTTP_EVENT_ON_CONNECTED:
+        return "CONNECTED";
+    case HTTP_EVENT_HEADERS_SENT:
+        return "HDR_SENT";
+    case HTTP_EVENT_ON_HEADER:
+        return "HEADER";
+    case HTTP_EVENT_ON_DATA:
+        return "DATA";
+    case HTTP_EVENT_ON_FINISH:
+        return "FINISH";
+    case HTTP_EVENT_DISCONNECTED:
+        return "DISCONNECTED";
+    case HTTP_EVENT_REDIRECT:
+        return "REDIRECT";
+    default:
+        return "?";
+    }
+}
+
+static bool http_transient(esp_err_t err)
+{
+    switch (err) {
+    case ESP_ERR_HTTP_CONNECT:
+    case ESP_ERR_HTTP_CONNECTING:
+    case ESP_ERR_HTTP_FETCH_HEADER:
+    case ESP_ERR_HTTP_EAGAIN:
+    case ESP_ERR_HTTP_CONNECTION_CLOSED:
+    case ESP_ERR_HTTP_READ_TIMEOUT:
+    case ESP_ERR_TIMEOUT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static int http_elapsed_ms(const http_acc_t *acc)
+{
+    if (!acc || acc->t0 == 0) {
+        return 0;
+    }
+    return (int)((esp_timer_get_time() - acc->t0) / 1000);
+}
+
+static int http_snap_fds(int *out, int max)
+{
+    int n = 0;
+    /* ESP-IDF mette i socket lwIP in alto (tipicamente 48..63), non 0..15. */
+    for (int fd = 0; fd < HTTP_FD_SCAN && n < max; fd++) {
+        int type = 0;
+        socklen_t len = sizeof(type);
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0 && type == SOCK_STREAM) {
+            out[n++] = fd;
+        }
+    }
+    return n;
+}
+
+static void http_shutdown_new_sockets(void)
+{
+    for (int fd = 0; fd < HTTP_FD_SCAN; fd++) {
+        int type = 0;
+        socklen_t len = sizeof(type);
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) != 0 || type != SOCK_STREAM) {
+            continue;
+        }
+        bool known = false;
+        for (int i = 0; i < s_n_before; i++) {
+            if (s_fds_before[i] == fd) {
+                known = true;
+                break;
+            }
+        }
+        if (known) {
+            continue;
+        }
+        ESP_LOGW(TAG, "watchdog shutdown fd=%d", fd);
+        shutdown(fd, SHUT_RDWR);
+    }
+}
+
+static void http_wd_cb(void *arg)
+{
+    (void)arg;
+    s_http_killed = true;
+    ESP_LOGW(TAG, "watchdog %dms: chiudo i socket della GET", HTTP_TIMEOUT_MS);
+    http_shutdown_new_sockets();
+    /* cancel_request in connect riapre un socket; close() è no-op se state==INIT. */
+}
+
+static void http_session_init(void)
+{
+    if (s_http_wd) {
+        return;
+    }
+    const esp_timer_create_args_t args = {
+        .callback = http_wd_cb,
+        .name = "http_wd",
+        .dispatch_method = ESP_TIMER_TASK,
+    };
+    if (esp_timer_create(&args, &s_http_wd) != ESP_OK) {
+        ESP_LOGE(TAG, "esp_timer_create http_wd failed");
+    }
+}
+
+static esp_err_t http_perform_deadline(esp_http_client_handle_t client, const http_acc_t *acc)
+{
+    http_session_init();
+    s_n_before = http_snap_fds(s_fds_before, HTTP_FD_MAX);
+    s_http_killed = false;
+    ESP_LOGI(TAG, "GET start, %d socket TCP già aperti", s_n_before);
+    if (s_http_wd) {
+        esp_timer_stop(s_http_wd);
+        esp_timer_start_once(s_http_wd, (uint64_t)HTTP_TIMEOUT_MS * 1000ULL);
+    }
+    esp_err_t err = esp_http_client_perform(client);
+    if (s_http_wd) {
+        esp_timer_stop(s_http_wd);
+    }
+    if (s_http_killed) {
+        ESP_LOGW(TAG, "GET interrotta dal watchdog dopo %dms", http_elapsed_ms(acc));
+        return ESP_ERR_TIMEOUT;
+    }
+    return err;
+}
+
 static esp_err_t http_evt(esp_http_client_event_t *evt)
 {
     http_acc_t *acc = (http_acc_t *)evt->user_data;
-    if (evt->event_id != HTTP_EVENT_ON_DATA || !acc || !evt->data) {
+    if (!acc) {
         return ESP_OK;
     }
-    if (acc->len + evt->data_len + 1 > acc->cap) {
-        return ESP_ERR_NO_MEM;
+    int ms = http_elapsed_ms(acc);
+    switch (evt->event_id) {
+    case HTTP_EVENT_ON_HEADER:
+        if (evt->header_key && evt->header_value &&
+            (strcasecmp(evt->header_key, "Content-Length") == 0 ||
+             strcasecmp(evt->header_key, "Content-Type") == 0 ||
+             strcasecmp(evt->header_key, "cf-ray") == 0 ||
+             strcasecmp(evt->header_key, "server") == 0)) {
+            ESP_LOGI(TAG, "http +%dms hdr %s: %s", ms, evt->header_key, evt->header_value);
+        }
+        break;
+    case HTTP_EVENT_ON_DATA:
+        if (!evt->data) {
+            break;
+        }
+        if (!acc->saw_data) {
+            ESP_LOGI(TAG, "http +%dms DATA first %d bytes", ms, evt->data_len);
+            acc->saw_data = true;
+        }
+        if (acc->len + evt->data_len + 1 > acc->cap) {
+            ESP_LOGW(TAG, "http +%dms body overflow cap=%u", ms, (unsigned)acc->cap);
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(acc->buf + acc->len, evt->data, evt->data_len);
+        acc->len += evt->data_len;
+        acc->buf[acc->len] = '\0';
+        break;
+    case HTTP_EVENT_ERROR:
+        ESP_LOGW(TAG, "http +%dms ERROR", ms);
+        break;
+    default:
+        ESP_LOGI(TAG, "http +%dms %s", ms, http_ev_name(evt->event_id));
+        break;
     }
-    memcpy(acc->buf + acc->len, evt->data, evt->data_len);
-    acc->len += evt->data_len;
-    acc->buf[acc->len] = '\0';
     return ESP_OK;
 }
 
-static void log_dns(const char *url)
+static const char *tls_alert_name(int code)
 {
-    const char *host = url;
-    if (strncmp(host, "https://", 8) == 0) {
-        host += 8;
+    switch (code) {
+    case 40:
+        return "handshake_failure";
+    case 47:
+        return "illegal_parameter";
+    case 80:
+        return "internal_error";
+    case 86:
+        return "inappropriate_fallback";
+    case 90:
+        return "user_canceled";
+    case 112:
+        return "unrecognized_name";
+    default:
+        return NULL;
     }
-    char name[96];
-    strlcpy(name, host, sizeof(name));
-    char *slash = strchr(name, '/');
-    if (slash) {
-        *slash = '\0';
-    }
-    char *colon = strchr(name, ':');
-    if (colon) {
-        *colon = '\0';
-    }
+}
 
-    const struct addrinfo hints = {
-        .ai_family = AF_INET,
-        .ai_socktype = SOCK_STREAM,
-    };
-    struct addrinfo *res = NULL;
-    int r = getaddrinfo(name, "443", &hints, &res);
-    if (r != 0 || !res) {
-        ESP_LOGW(TAG, "DNS %s failed (%d)", name, r);
-        return;
+static void format_net_error(char *msg, size_t n, esp_err_t err)
+{
+    int ms = s_http_diag.elapsed_ms;
+    int tls = s_http_diag.tls_code;
+    switch (err) {
+    case ESP_ERR_TIMEOUT:
+    case ESP_ERR_HTTP_READ_TIMEOUT:
+        snprintf(msg, n, "Timeout HTTP (%d ms)", ms);
+        break;
+    case ESP_ERR_HTTP_CONNECT:
+    case ESP_ERR_HTTP_CONNECTING: {
+        const char *alert = tls_alert_name(tls);
+        if (alert) {
+            snprintf(msg, n, "TLS %s (%d ms)", alert, ms);
+        } else if (tls) {
+            snprintf(msg, n, "TLS/connect (%d ms, tls=%d)", ms, tls);
+        } else if (ms >= HTTP_TIMEOUT_MS - 500) {
+            snprintf(msg, n, "Timeout connect (%d ms)", ms);
+        } else {
+            snprintf(msg, n, "Connessione HTTP (%d ms)", ms);
+        }
+        break;
     }
-    char ip[16] = {0};
-    struct sockaddr_in *a = (struct sockaddr_in *)res->ai_addr;
-    inet_ntoa_r(a->sin_addr, ip, sizeof(ip));
-    ESP_LOGI(TAG, "DNS %s -> %s", name, ip);
-    freeaddrinfo(res);
+    case ESP_ERR_HTTP_CONNECTION_CLOSED:
+        snprintf(msg, n, "HTTP chiuso dal server (%d ms)", ms);
+        break;
+    case ESP_ERR_HTTP_FETCH_HEADER:
+        snprintf(msg, n, "Timeout header HTTP (%d ms)", ms);
+        break;
+    case ESP_ERR_HTTP_EAGAIN:
+        snprintf(msg, n, "HTTP EAGAIN (%d ms)", ms);
+        break;
+    case ESP_ERR_NO_MEM:
+        snprintf(msg, n, "Memoria HTTP insufficiente");
+        break;
+    default:
+        snprintf(msg, n, "Rete: %s (%d ms)", esp_err_to_name(err), ms);
+        break;
+    }
+}
+
+static void log_http_fail(const char *url, int attempt)
+{
+    char tls_str[48] = {0};
+    const char *alert = tls_alert_name(s_http_diag.tls_code);
+    if (alert) {
+        snprintf(tls_str, sizeof(tls_str), "alert %s", alert);
+    } else if (s_http_diag.tls_code < 0) {
+        mbedtls_strerror(s_http_diag.tls_code, tls_str, sizeof(tls_str));
+    } else if (s_http_diag.tls_code) {
+        snprintf(tls_str, sizeof(tls_str), "code=%d", s_http_diag.tls_code);
+    }
+    ESP_LOGW(TAG,
+             "GET fail attempt=%d %s elapsed=%dms err=%s (%d) errno=%d (%s) tls_esp=%s tls=%d (%s) "
+             "flags=0x%x status=%d net=%s ip=%s rssi=%d heap_int=%u%s url=%s",
+             attempt, http_transient(s_http_diag.err) ? "transient" : "fatal", s_http_diag.elapsed_ms,
+             esp_err_to_name(s_http_diag.err), (int)s_http_diag.err, s_http_diag.sock_errno,
+             (s_http_diag.sock_errno && strerror(s_http_diag.sock_errno)) ? strerror(s_http_diag.sock_errno) : "-",
+             esp_err_to_name(s_http_diag.tls_esp), s_http_diag.tls_code, tls_str[0] ? tls_str : "-",
+             s_http_diag.tls_flags, s_http_diag.status, app_net_kind_name(), app_net_ip(), (int)app_wifi_rssi(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             s_http_diag.elapsed_ms >= HTTP_TIMEOUT_MS - 500 ? " [TIMEOUT]" : "", url);
 }
 
 static esp_err_t http_get(const char *url, const char *token, char **out_body, int *out_status)
 {
     *out_body = NULL;
     *out_status = 0;
+    memset(&s_http_diag, 0, sizeof(s_http_diag));
 
-    ESP_LOGI(TAG, "heap int=%u psram=%u",
+    ESP_LOGI(TAG, "heap int=%u psram=%u net=%s ip=%s rssi=%d",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    log_dns(url);
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), app_net_kind_name(), app_net_ip(),
+             (int)app_wifi_rssi());
 
     char *buf = heap_caps_malloc(HTTP_BODY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
@@ -142,26 +380,6 @@ static esp_err_t http_get(const char *url, const char *token, char **out_body, i
     if (!buf) {
         return ESP_ERR_NO_MEM;
     }
-    buf[0] = '\0';
-    http_acc_t acc = {.buf = buf, .cap = HTTP_BODY_MAX, .len = 0};
-
-    esp_http_client_config_t cfg = {
-        .url = url,
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = 30000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .event_handler = http_evt,
-        .user_data = &acc,
-        .buffer_size = 4096,
-        .keep_alive_enable = false,
-        .user_agent = "PowerwallLCD/1.0",
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-        free(buf);
-        return ESP_FAIL;
-    }
 
     size_t auth_n = strlen(token) + 16;
     char *auth = heap_caps_malloc(auth_n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -169,36 +387,94 @@ static esp_err_t http_get(const char *url, const char *token, char **out_body, i
         auth = malloc(auth_n);
     }
     if (!auth) {
-        esp_http_client_cleanup(client);
         free(buf);
         return ESP_ERR_NO_MEM;
     }
     snprintf(auth, auth_n, "Bearer %s", token);
-    esp_http_client_set_header(client, "Authorization", auth);
-    esp_http_client_set_header(client, "X-Authorization", auth);
-    esp_http_client_set_header(client, "Accept", "application/json");
 
-    esp_err_t err = esp_http_client_perform(client);
-    *out_status = esp_http_client_get_status_code(client);
-    if (err != ESP_OK) {
+    http_acc_t acc = {.buf = buf, .cap = HTTP_BODY_MAX, .len = 0};
+    esp_err_t err = ESP_FAIL;
+
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        buf[0] = '\0';
+        acc.len = 0;
+        acc.saw_data = false;
+        acc.t0 = esp_timer_get_time();
+
+        esp_http_client_config_t cfg = {
+            .url = url,
+            .method = HTTP_METHOD_GET,
+            .timeout_ms = HTTP_TIMEOUT_MS,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .event_handler = http_evt,
+            .user_data = &acc,
+            .buffer_size = 4096,
+            .keep_alive_enable = false,
+            .user_agent = "PowerwallLCD/1.0",
+        };
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        if (!client) {
+            err = ESP_FAIL;
+            s_http_diag.err = err;
+            s_http_diag.attempt = attempt;
+            ESP_LOGW(TAG, "esp_http_client_init failed");
+            break;
+        }
+        esp_http_client_set_header(client, "Authorization", auth);
+        esp_http_client_set_header(client, "X-Authorization", auth);
+        esp_http_client_set_header(client, "Accept", "application/json");
+
+        ESP_LOGI(TAG, "GET attempt=%d deadline=%dms %s", attempt, HTTP_TIMEOUT_MS, url);
+        app_net_http_lock();
+        err = http_perform_deadline(client, &acc);
+        int elapsed = http_elapsed_ms(&acc);
+        int status = esp_http_client_get_status_code(client);
+        int sock_errno = esp_http_client_get_errno(client);
         int tls_code = 0;
         int tls_flags = 0;
-        esp_http_client_get_and_clear_last_tls_error(client, &tls_code, &tls_flags);
-        ESP_LOGW(TAG, "GET %s failed: %s tls=%d flags=0x%x", url, esp_err_to_name(err), tls_code, tls_flags);
+        esp_err_t tls_esp = ESP_OK;
+        if (err != ESP_OK) {
+            tls_esp = esp_http_client_get_and_clear_last_tls_error(client, &tls_code, &tls_flags);
+        }
+        s_http_diag.err = err;
+        s_http_diag.status = status;
+        s_http_diag.sock_errno = sock_errno;
+        s_http_diag.tls_code = tls_code;
+        s_http_diag.tls_flags = tls_flags;
+        s_http_diag.tls_esp = tls_esp;
+        s_http_diag.elapsed_ms = elapsed;
+        s_http_diag.attempt = attempt;
+        *out_status = status;
+        (void)esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        free(auth);
-        free(buf);
-        return err;
-    }
-    esp_http_client_cleanup(client);
-    free(auth);
+        if (s_http_killed) {
+            http_shutdown_new_sockets();
+        }
+        app_net_http_unlock();
 
-    ESP_LOGI(TAG, "GET %s -> %d (%u bytes)", url, *out_status, (unsigned)acc.len);
-    *out_body = buf;
-    return ESP_OK;
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "GET ok attempt=%d %dms HTTP %d %u bytes %s", attempt, elapsed, status,
+                     (unsigned)acc.len, url);
+            free(auth);
+            *out_body = buf;
+            return ESP_OK;
+        }
+
+        log_http_fail(url, attempt);
+        if (attempt == 1 && http_transient(err)) {
+            ESP_LOGW(TAG, "retry GET tra 500ms");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        break;
+    }
+
+    free(auth);
+    free(buf);
+    return err;
 }
 
-static void set_http_error(int status, const char *fallback)
+static void set_http_error(int status, esp_err_t err, const char *fallback)
 {
     char msg[128];
     if (status == 401 || status == 403) {
@@ -209,9 +485,12 @@ static void set_http_error(int status, const char *fallback)
         snprintf(msg, sizeof(msg), "Troppe richieste (429)");
     } else if (status > 0) {
         snprintf(msg, sizeof(msg), "Errore API HTTP %d", status);
+    } else if (err != ESP_OK) {
+        format_net_error(msg, sizeof(msg), err);
     } else {
         strlcpy(msg, fallback ? fallback : "Errore di rete", sizeof(msg));
     }
+    ESP_LOGW(TAG, "display: %s", msg);
     energy_model_set_error(msg);
 }
 
@@ -230,6 +509,23 @@ static float json_num(const cJSON *obj, const char *key)
     return 0;
 }
 
+static float json_num_keys(const cJSON *obj, const char *const *keys)
+{
+    for (int i = 0; keys && keys[i]; i++) {
+        const cJSON *v = cJSON_GetObjectItem(obj, keys[i]);
+        if (!v) {
+            continue;
+        }
+        if (cJSON_IsNumber(v)) {
+            return (float)v->valuedouble;
+        }
+        if (cJSON_IsString(v) && v->valuestring) {
+            return (float)atof(v->valuestring);
+        }
+    }
+    return 0;
+}
+
 static bool parse_live(const char *body, energy_live_t *live)
 {
     memset(live, 0, sizeof(*live));
@@ -243,11 +539,17 @@ static bool parse_live(const char *body, energy_live_t *live)
         resp = root;
     }
 
-    live->solar_w = json_num(resp, "solar_power");
-    live->home_w = json_num(resp, "load_power");
-    live->battery_w = json_num(resp, "battery_power");
-    live->grid_w = json_num(resp, "grid_power");
-    live->soc_pct = json_num(resp, "percentage_charged");
+    static const char *k_solar[] = {"solar_power", "solarPower", "solar", NULL};
+    static const char *k_home[] = {"load_power", "loadPower", "home_power", "instantaneous_power", NULL};
+    static const char *k_batt[] = {"battery_power", "batteryPower", "battery", NULL};
+    static const char *k_grid[] = {"grid_power", "gridPower", "grid", NULL};
+    static const char *k_soc[] = {"percentage_charged", "percentageCharged", "battery_soc", NULL};
+
+    live->solar_w = json_num_keys(resp, k_solar);
+    live->home_w = json_num_keys(resp, k_home);
+    live->battery_w = json_num_keys(resp, k_batt);
+    live->grid_w = json_num_keys(resp, k_grid);
+    live->soc_pct = json_num_keys(resp, k_soc);
     live->energy_left_wh = json_num(resp, "energy_left");
     const cJSON *storm = cJSON_GetObjectItem(resp, "storm_mode_active");
     live->storm = cJSON_IsTrue(storm);
@@ -257,9 +559,15 @@ static bool parse_live(const char *body, energy_live_t *live)
         live->grid_active = strcasecmp(gs->valuestring, "Inactive") != 0;
     }
 
-    app_config_t cfg;
-    app_config_get(&cfg);
-    strlcpy(live->site_name, cfg.site_name, sizeof(live->site_name));
+    const cJSON *sn = cJSON_GetObjectItem(resp, "site_name");
+    if (cJSON_IsString(sn) && sn->valuestring && sn->valuestring[0]) {
+        strlcpy(live->site_name, sn->valuestring, sizeof(live->site_name));
+        app_config_set_site_name(sn->valuestring);
+    } else {
+        app_config_t cfg;
+        app_config_get(&cfg);
+        strlcpy(live->site_name, cfg.site_name, sizeof(live->site_name));
+    }
 
     time_t t = time(NULL);
     struct tm tm;
@@ -612,11 +920,14 @@ static bool parse_period_energy(const char *body, energy_period_t *p, energy_ran
     memset(p, 0, sizeof(*p));
     cJSON *root = cJSON_Parse(body);
     if (!root) {
+        size_t n = body ? strlen(body) : 0;
+        ESP_LOGW(TAG, "energy JSON parse fail len=%u head=%.80s", (unsigned)n, body ? body : "");
         return false;
     }
     cJSON *resp = cJSON_GetObjectItem(root, "response");
     cJSON *series = resp ? cJSON_GetObjectItem(resp, "time_series") : NULL;
     if (!cJSON_IsArray(series)) {
+        ESP_LOGW(TAG, "energy time_series assente head=%.120s", body ? body : "");
         cJSON_Delete(root);
         return false;
     }
@@ -853,25 +1164,6 @@ static bool parse_period_energy(const char *body, energy_period_t *p, energy_ran
     return p->valid;
 }
 
-static bool contains_ci(const char *hay, const char *needle)
-{
-    if (!hay || !needle || !needle[0]) {
-        return false;
-    }
-    for (const char *p = hay; *p; p++) {
-        const char *h = p;
-        const char *n = needle;
-        while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) {
-            h++;
-            n++;
-        }
-        if (*n == '\0') {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool is_energy_product(const cJSON *prod)
 {
     if (cJSON_GetObjectItem(prod, "energy_site_id")) {
@@ -902,38 +1194,11 @@ static int energy_rank(const cJSON *prod)
     return 2;
 }
 
-static bool product_text_has(const cJSON *prod, const char *needle)
-{
-    if (!prod || !needle || !needle[0]) {
-        return false;
-    }
-    for (const cJSON *c = prod->child; c; c = c->next) {
-        if (cJSON_IsString(c) && c->valuestring && contains_ci(c->valuestring, needle)) {
-            return true;
-        }
-        if (cJSON_IsNumber(c)) {
-            char num[32];
-            json_id_to_str(c, num, sizeof(num));
-            if (strcmp(num, needle) == 0) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 static bool match_product(const cJSON *prod, const app_config_t *cfg)
 {
     char id[APP_SITE_ID_MAX] = {0};
     json_id_to_str(cJSON_GetObjectItem(prod, "energy_site_id"), id, sizeof(id));
-    if (id[0] && cfg->site_id[0] && strcmp(id, cfg->site_id) == 0) {
-        return true;
-    }
-    if (product_text_has(prod, cfg->site_id) || product_text_has(prod, "Sergio") ||
-        product_text_has(prod, cfg->site_name)) {
-        return true;
-    }
-    return false;
+    return id[0] && cfg->site_id[0] && strcmp(id, cfg->site_id) == 0;
 }
 
 static void apply_site(const cJSON *prod)
@@ -965,7 +1230,7 @@ static esp_err_t resolve_site(const char *host, const char *token)
         return err;
     }
     if (status != 200 || !body) {
-        set_http_error(status, "Impossibile elencare i dispositivi");
+        set_http_error(status, ESP_OK, "Impossibile elencare i dispositivi");
         free(body);
         return ESP_FAIL;
     }
@@ -1016,14 +1281,20 @@ static esp_err_t resolve_site(const char *host, const char *token)
         }
     }
 
-    const cJSON *chosen = matched ? matched : fallback;
-    if (!chosen) {
+    const cJSON *chosen = matched;
+    if (!chosen && !cfg.site_id[0]) {
+        chosen = fallback;
+    }
+    if (chosen) {
+        apply_site(chosen);
+    } else if (!cfg.site_id[0]) {
         ESP_LOGW(TAG, "nessun energy_site_id in %d prodotti", n);
         energy_model_set_error("Nessun Powerwall nell'account");
         cJSON_Delete(root);
         return ESP_ERR_NOT_FOUND;
+    } else {
+        ESP_LOGW(TAG, "site_id %s non trovato in /products, tengo l'id", cfg.site_id);
     }
-    apply_site(chosen);
     cJSON_Delete(root);
     (void)energy_n;
     return ESP_OK;
@@ -1048,6 +1319,7 @@ static void build_history_url(char *url, size_t n, const char *host, const char 
 }
 
 static bool s_site_resolved;
+static char s_resolved_id[APP_SITE_ID_MAX];
 
 esp_err_t tesla_client_fetch_live(void)
 {
@@ -1059,11 +1331,12 @@ esp_err_t tesla_client_fetch_live(void)
     }
     trim_slash(cfg.api_host);
 
-    if (!s_site_resolved) {
+    if (!s_site_resolved || strcmp(s_resolved_id, cfg.site_id) != 0) {
         if (resolve_site(cfg.api_host, cfg.api_token) == ESP_OK) {
             s_site_resolved = true;
             app_config_get(&cfg);
             trim_slash(cfg.api_host);
+            strlcpy(s_resolved_id, cfg.site_id, sizeof(s_resolved_id));
         }
     }
 
@@ -1076,14 +1349,15 @@ esp_err_t tesla_client_fetch_live(void)
     int status = 0;
     esp_err_t err = http_get(url, cfg.api_token, &body, &status);
     if (err != ESP_OK) {
-        set_http_error(0, "Errore di rete");
+        set_http_error(0, err, "Errore di rete");
         return err;
     }
     if (status != 200 || !body) {
         if (status == 404) {
             s_site_resolved = false;
+            s_resolved_id[0] = '\0';
         }
-        set_http_error(status, "live_status fallito");
+        set_http_error(status, ESP_OK, "live_status fallito");
         ESP_LOGW(TAG, "live_status HTTP %d site=%s body=%.160s", status, cfg.site_id, body ? body : "");
         free(body);
         return ESP_FAIL;
@@ -1151,7 +1425,7 @@ esp_err_t tesla_client_test(char *msg, size_t msg_len)
     int status = 0;
     esp_err_t err = http_get(url, cfg.api_token, &body, &status);
     if (err != ESP_OK) {
-        snprintf(msg, msg_len, "Rete: %s", esp_err_to_name(err));
+        format_net_error(msg, msg_len, err);
         return err;
     }
     if (status != 200) {
@@ -1162,6 +1436,7 @@ esp_err_t tesla_client_test(char *msg, size_t msg_len)
     resolve_site(cfg.api_host, cfg.api_token);
     s_site_resolved = true;
     app_config_get(&cfg);
+    strlcpy(s_resolved_id, cfg.site_id, sizeof(s_resolved_id));
     cJSON *root = cJSON_Parse(body);
     free(body);
     int count = 0;
