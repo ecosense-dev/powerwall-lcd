@@ -55,6 +55,8 @@ static const char *const S_IT[STR_COUNT] = {
     [STR_READS] = "Ultime 15 letture",
     [STR_NO_READS] = "Nessuna lettura ancora.",
     [STR_LANG] = "Lingua",
+    [STR_ROTATE] = "Ruota 180°",
+    [STR_REBOOTING] = "Riavvio per ruotare lo schermo...",
     [STR_SAVED] = "Salvato in NVS",
     [STR_SCANNING] = "Ricerca reti...",
     [STR_SCAN_FAIL] = "Scan WiFi fallito (avvia WiFi)",
@@ -144,6 +146,11 @@ static const char *const S_IT[STR_COUNT] = {
     [STR_WEB_CONN_H] = "Connessione in corso",
     [STR_WEB_CONN_P] = "Attendi, la pagina si aggiorna da sola.",
     [STR_WEB_CONN_FOOT] = "Se il telefono perde la rete, torna sul WiFi di casa e apri l'IP in Impostazioni sul display.",
+    [STR_WEB_SCREEN] = "Schermo",
+    [STR_WEB_SCREEN_P] = "Se il monitor e' montato al contrario. Il dispositivo si riavvia.",
+    [STR_WEB_ROTATE] = "Ruota di 180 gradi",
+    [STR_WEB_ROT_0] = "Orientamento attuale: 0 gradi",
+    [STR_WEB_ROT_180] = "Orientamento attuale: 180 gradi",
 };
 
 static const char *const S_EN[STR_COUNT] = {
@@ -199,6 +206,8 @@ static const char *const S_EN[STR_COUNT] = {
     [STR_READS] = "Last 15 readings",
     [STR_NO_READS] = "No readings yet.",
     [STR_LANG] = "Language",
+    [STR_ROTATE] = "Rotate 180°",
+    [STR_REBOOTING] = "Rebooting to rotate the screen...",
     [STR_SAVED] = "Saved to NVS",
     [STR_SCANNING] = "Scanning...",
     [STR_SCAN_FAIL] = "WiFi scan failed (start WiFi)",
@@ -288,6 +297,11 @@ static const char *const S_EN[STR_COUNT] = {
     [STR_WEB_CONN_H] = "Connecting",
     [STR_WEB_CONN_P] = "Please wait, this page will refresh.",
     [STR_WEB_CONN_FOOT] = "If the phone drops the AP, join home WiFi and open the IP shown on Settings.",
+    [STR_WEB_SCREEN] = "Display",
+    [STR_WEB_SCREEN_P] = "Use this if the monitor is mounted upside down. The device will reboot.",
+    [STR_WEB_ROTATE] = "Rotate 180 degrees",
+    [STR_WEB_ROT_0] = "Current orientation: 0 degrees",
+    [STR_WEB_ROT_180] = "Current orientation: 180 degrees",
 };
 
 const char *app_tr(app_str_id_t id)

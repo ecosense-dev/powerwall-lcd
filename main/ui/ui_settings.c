@@ -52,6 +52,7 @@ typedef struct {
     lv_obj_t *btn_test;
     lv_obj_t *btn_it;
     lv_obj_t *btn_en;
+    lv_obj_t *btn_rot;
     bool wizard;
 } settings_form_t;
 
@@ -149,6 +150,7 @@ static void style_lang_btns(settings_form_t *f)
     bool en = app_lang() == APP_LANG_EN;
     style_lang_btn(f->btn_it, !en);
     style_lang_btn(f->btn_en, en);
+    style_lang_btn(f->btn_rot, app_config_rot180());
 }
 
 static void load_form(settings_form_t *f)
@@ -342,6 +344,15 @@ static void on_lang(lv_event_t *e)
     ui_refresh();
 }
 
+static void on_rotate(lv_event_t *e)
+{
+    (void)e;
+    app_config_set_rot180(!app_config_rot180());
+    app_config_save();
+    ui_settings_show_message(app_tr(STR_REBOOTING), false);
+    app_config_reboot_soon();
+}
+
 static void populate_list_clicks(settings_form_t *f)
 {
     /* scan_task adds buttons without event; attach after scan in a simpler way:
@@ -479,6 +490,11 @@ static void build_form(lv_obj_t *parent, settings_form_t *f, bool wizard)
     lv_obj_set_size(f->btn_test, 140, 40);
     lv_obj_set_pos(f->btn_test, 192, 564);
 
+    f->btn_rot = make_btn(parent, app_tr(STR_ROTATE), on_rotate, f);
+    lv_obj_set_size(f->btn_rot, 396, 40);
+    lv_obj_set_pos(f->btn_rot, 344, 564);
+    style_lang_btns(f);
+
     f->msg = ui_label(parent, &lv_font_montserrat_14, COL_MUTED);
     lv_label_set_text(f->msg, "");
     lv_obj_set_pos(f->msg, 0, 612);
@@ -592,6 +608,7 @@ static void apply_lang_form(settings_form_t *f)
     btn_set_text(f->btn_save, app_tr(STR_SAVE));
     lv_obj_set_style_text_color(lv_obj_get_child(f->btn_save, 0), COL_BG, 0);
     btn_set_text(f->btn_test, app_tr(STR_TEST_API));
+    btn_set_text(f->btn_rot, app_tr(STR_ROTATE));
     style_lang_btns(f);
     set_ip_label(f);
     set_reads_label(f);

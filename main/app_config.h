@@ -45,6 +45,7 @@ typedef struct {
     uint16_t poll_s;
     uint16_t wx_poll_min;
     uint8_t lang;
+    uint8_t rot180;
 } app_config_t;
 
 esp_err_t app_config_init(void);
@@ -68,5 +69,8 @@ void app_config_set_gps(const char *lat, const char *lon);
 void app_config_set_lte(const char *apn, const char *pin, const char *user, const char *pass);
 void app_config_set_polls(uint16_t tesla_s, uint16_t wx_min);
 void app_config_set_lang(uint8_t lang);
+void app_config_set_rot180(uint8_t on);
+bool app_config_rot180(void);
+void app_config_reboot_soon(void);
 bool app_config_has_gps(void);
 bool app_config_parse_gps(float *lat, float *lon);

@@ -417,6 +417,14 @@ static char *build_page(const char *flash)
     snprintf(line, sizeof(line), "<button type=\"submit\">%s</button></form>", app_tr(STR_WEB_SAVE_TOKEN));
     append(&html, &len, &cap, line);
 
+    snprintf(line, sizeof(line), "<h2>%s</h2><p>%s</p><p>%s</p>", app_tr(STR_WEB_SCREEN),
+             app_tr(STR_WEB_SCREEN_P), cfg.rot180 ? app_tr(STR_WEB_ROT_180) : app_tr(STR_WEB_ROT_0));
+    append(&html, &len, &cap, line);
+    snprintf(line, sizeof(line),
+             "<form method=\"post\" action=\"/rotate\"><button type=\"submit\">%s</button></form>",
+             app_tr(STR_WEB_ROTATE));
+    append(&html, &len, &cap, line);
+
     snprintf(line, sizeof(line), "<h2>%s</h2>", app_tr(STR_WEB_OTA));
     append(&html, &len, &cap, line);
     append(&html, &len, &cap, "<p>");
@@ -560,6 +568,28 @@ static esp_err_t on_post_save(httpd_req_t *req)
     return send_page(req, err == ESP_OK ? app_tr(STR_WEB_OK) : app_tr(STR_WEB_NVS));
 }
 
+static esp_err_t on_post_rotate(httpd_req_t *req)
+{
+    if (!web_unlocked(req)) {
+        return send_pin_page(req, NULL);
+    }
+    app_config_set_rot180(!app_config_rot180());
+    app_config_save();
+    app_config_reboot_soon();
+
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    char msg[640];
+    snprintf(msg, sizeof(msg),
+             "<!DOCTYPE html><html lang=\"%s\"><head><meta charset=\"utf-8\">"
+             "<title>%s</title></head>"
+             "<body style=\"background:#000;color:#f5f5f5;font-family:sans-serif;padding:24px\">"
+             "<h1>%s</h1><p>%s</p></body></html>",
+             app_lang() == APP_LANG_EN ? "en" : "it", app_tr(STR_WEB_SCREEN), app_tr(STR_WEB_SCREEN),
+             app_tr(STR_REBOOTING));
+    return httpd_resp_send(req, msg, HTTPD_RESP_USE_STRLEN);
+}
+
 static esp_err_t on_post_wifi(httpd_req_t *req)
 {
     if (!web_unlocked(req)) {
@@ -619,6 +649,7 @@ static void register_uris(httpd_handle_t srv)
     const httpd_uri_t pin = {.uri = "/pin", .method = HTTP_POST, .handler = on_post_pin};
     const httpd_uri_t health = {.uri = "/health", .method = HTTP_GET, .handler = on_get_health};
     const httpd_uri_t save = {.uri = "/save", .method = HTTP_POST, .handler = on_post_save};
+    const httpd_uri_t rotate = {.uri = "/rotate", .method = HTTP_POST, .handler = on_post_rotate};
     const httpd_uri_t wifi = {.uri = "/wifi", .method = HTTP_POST, .handler = on_post_wifi};
     const httpd_uri_t ota = {.uri = "/ota", .method = HTTP_POST, .handler = on_post_ota};
     const httpd_uri_t captive = {.uri = "/*", .method = HTTP_GET, .handler = on_captive};
@@ -626,6 +657,7 @@ static void register_uris(httpd_handle_t srv)
     httpd_register_uri_handler(srv, &pin);
     httpd_register_uri_handler(srv, &health);
     httpd_register_uri_handler(srv, &save);
+    httpd_register_uri_handler(srv, &rotate);
     httpd_register_uri_handler(srv, &wifi);
     httpd_register_uri_handler(srv, &ota);
     httpd_register_uri_handler(srv, &captive);

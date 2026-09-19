@@ -178,8 +178,8 @@ esp_err_t waveshare_esp32_s3_rgb_lcd_init(esp_lv_adapter_tear_avoid_mode_t tear_
         },
         .flags = {
             .swap_xy = 0,
-            .mirror_x = 0,
-            .mirror_y = 0,
+            .mirror_x = (rotation == ESP_LV_ADAPTER_ROTATE_180) ? 1 : 0,
+            .mirror_y = (rotation == ESP_LV_ADAPTER_ROTATE_180) ? 1 : 0,
         },
     };
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, touch_handle));

@@ -5,6 +5,9 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -101,6 +104,10 @@ esp_err_t app_config_load(void)
     if (nvs_get_u8(h, "lang", &lang) == ESP_OK && lang <= 1) {
         s_cfg.lang = lang;
     }
+    uint8_t rot = 0;
+    if (nvs_get_u8(h, "rot180", &rot) == ESP_OK) {
+        s_cfg.rot180 = rot ? 1 : 0;
+    }
 
     if (s_cfg.api_host[0] == '\0') {
         strlcpy(s_cfg.api_host, APP_API_HOST_DEFAULT, sizeof(s_cfg.api_host));
@@ -139,6 +146,7 @@ esp_err_t app_config_save(void)
     err = err ? err : nvs_set_u16(h, "poll_s", s_cfg.poll_s);
     err = err ? err : nvs_set_u16(h, "wx_min", s_cfg.wx_poll_min);
     err = err ? err : nvs_set_u8(h, "lang", s_cfg.lang);
+    err = err ? err : nvs_set_u8(h, "rot180", s_cfg.rot180);
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
@@ -298,6 +306,28 @@ void app_config_set_polls(uint16_t tesla_s, uint16_t wx_min)
 void app_config_set_lang(uint8_t lang)
 {
     s_cfg.lang = (lang == 1) ? 1 : 0;
+}
+
+void app_config_set_rot180(uint8_t on)
+{
+    s_cfg.rot180 = on ? 1 : 0;
+}
+
+bool app_config_rot180(void)
+{
+    return s_cfg.rot180 != 0;
+}
+
+static void reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(900));
+    esp_restart();
+}
+
+void app_config_reboot_soon(void)
+{
+    xTaskCreate(reboot_task, "reboot", 2048, NULL, 6, NULL);
 }
 
 bool app_config_parse_gps(float *lat, float *lon)

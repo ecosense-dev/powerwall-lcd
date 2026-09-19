@@ -58,6 +58,8 @@ typedef enum {
     STR_READS,
     STR_NO_READS,
     STR_LANG,
+    STR_ROTATE,
+    STR_REBOOTING,
     STR_SAVED,
     STR_SCANNING,
     STR_SCAN_FAIL,
@@ -147,6 +149,11 @@ typedef enum {
     STR_WEB_CONN_H,
     STR_WEB_CONN_P,
     STR_WEB_CONN_FOOT,
+    STR_WEB_SCREEN,
+    STR_WEB_SCREEN_P,
+    STR_WEB_ROTATE,
+    STR_WEB_ROT_0,
+    STR_WEB_ROT_180,
     STR_COUNT
 } app_str_id_t;
 

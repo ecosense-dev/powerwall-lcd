@@ -168,8 +168,12 @@ void app_main(void)
     ESP_ERROR_CHECK(app_wifi_init());
     ESP_ERROR_CHECK(app_lte_init());
 
-    const esp_lv_adapter_rotation_t rotation = ESP_LV_ADAPTER_ROTATE_0;
+    app_config_t boot_cfg;
+    app_config_get(&boot_cfg);
+    const esp_lv_adapter_rotation_t rotation =
+        boot_cfg.rot180 ? ESP_LV_ADAPTER_ROTATE_180 : ESP_LV_ADAPTER_ROTATE_0;
     const esp_lv_adapter_tear_avoid_mode_t tear_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DEFAULT_RGB;
+    ESP_LOGI(TAG, "display rotation %d", (int)rotation);
 
     esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_touch_handle_t touch_handle = NULL;
